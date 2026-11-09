@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=digitaltwin
-#SBATCH --output=logs/%x-%j.out     # submit from the repo root: sbatch slurm/train.sh
+#SBATCH --output=logs/%x-%j.out     # submit from the repo root: sbatch slurm/train.sh --model gemma-4-e4b
 #SBATCH --partition=AMD7763-A100-CCP    # A100 80GB, node208-24; Ada: sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -13,12 +13,8 @@ module load cuda/13.1
 # Activate your environment (built with `uv sync`)
 source .venv/bin/activate
 
-# Set WandB project name and mode (can be overridden in train.py)
-export WANDB_PROJECT="digitaltwin-llama3-finetune" # Match the one in train.py or manage centrally here
+export WANDB_PROJECT="digitaltwin"
 export WANDB_MODE=offline
 
-# Ensure output directories exist
-mkdir -p logs outputs # Changed to base output dir
-
-# Run the training using srun
-srun python train.py
+# Arguments are passed through: see python -m digital_twin.train --help
+srun python -m digital_twin.train "$@"

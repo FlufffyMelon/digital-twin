@@ -16,8 +16,14 @@
 ## Структура
 
 ```
+├── digital_twin/             v2: обработка переписки, обучение, чат
+│   ├── telegram.py             разбор экспорта: заглушки медиа, маскирование, цитаты реплаев
+│   ├── dataset.py              сессии → окна диалога с репликами <wait> (data/datasets/chat/v2)
+│   ├── chat_format.py          рендер в формат Gemma 4 / Qwen3.5 с маской loss по репликам
+│   ├── train.py                LoRA через unsloth
+│   └── chat.py                 генерация «сообщение за сообщением до <wait>», eval на валидации
 ├── data/                     переписки и датасеты (не в git, кроме data/README.md)
-├── notebooks/
+├── notebooks/                v1
 │   ├── data_processing.ipynb   разбор экспорта Telegram и сборка всех вариантов датасета
 │   ├── llm_processing.ipynb    попытка отбирать ответы на вопросы с помощью Llama-3.1-8B-Instruct
 │   ├── ollama_prototype.ipynb  ранний прототип: разметка диалога в пары вопрос/ответ через Ollama
@@ -27,9 +33,9 @@
 │   ├── create_dataset.py       интерактивная ручная разметка ответов на вопросы
 │   └── nbstrip.py              очистка выводов ноутбуков (git-фильтр и проверка в хуке)
 ├── slurm/
-│   ├── train.sh                обучение (`train.py`)
+│   ├── train.sh                обучение (`python -m digital_twin.train`)
 │   └── jupyter.sh              Jupyter Lab на GPU-узле
-├── train.py                  обучение LoRA (основной скрипт)
+├── legacy/train_v1.py        обучение v1 (Llama-3.1-8B, TRL 0.15, на новом стеке не запускается)
 ├── logs/                     логи slurm (не в git)
 ├── outputs/, wandb/          чекпоинты и логи обучения — только на кластере
 ├── pyproject.toml, uv.lock   окружение
@@ -88,8 +94,11 @@ mutagen project terminate  # остановить
 - `node211-22`: RTX 4500 Ada 24GB, раздел `AMD7V12-RTX4500-CCP` — по умолчанию в `slurm/jupyter.sh`.
 
 ```bash
-sbatch slurm/train.sh                              # обучение на A100
-sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh       # обучение на Ada
+python3 -m digital_twin.dataset                                  # собрать датасет (локально, только stdlib)
+sbatch slurm/train.sh --model gemma-4-e4b                        # обучение на A100
+sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh --model qwen3.5-4b  # обучение на Ada
+srun -p AMD7V12-RTX4500-CCP --gres=gpu:1 --pty bash -c \
+  "module load cuda/13.1; .venv/bin/python -m digital_twin.chat outputs/<run>/final"  # чат
 sbatch slurm/jupyter.sh                            # Jupyter Lab
 ```
 
