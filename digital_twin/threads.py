@@ -22,7 +22,24 @@ was answering. Here every example is one thread of mine:
     output  my message and the follow-ups written within CONTINUE_GAP, then WAIT;
             a new reply to Соня starts its own thread
 
-    python -m digital_twin.threads --version v5   # build data/datasets/chat/v5
+v6 drops the threads: 22% of thread examples ended with a WAIT although I went
+on writing (a reply to her next message), so the model learned to answer one
+of her messages and fall silent. A v6 example is a whole exchange instead:
+
+    input   all her messages since my last one (her messages written together are
+            usually one thought, answered together)
+    context the last half hour before them, as in v5
+    output  my whole burst — until her next message or a pause over CONTINUE_GAP —
+            then WAIT, which is now always a real stop; a message I sent as a
+            Telegram reply carries the quote (↪ «…»), so the model learns when to
+            answer one of several topics by reply and when to answer everything at once
+
+Text and stickers only, as in v5. In the train split every exchange comes three
+times — with the full context, with only its last 2–4 messages and with none —
+so the model also learns to answer at the start of a chat (the bot after /reset)
+and does not lean on a long history; the val split keeps the full context.
+
+    python -m digital_twin.threads --version v6   # build data/datasets/chat/v6
     python -m digital_twin.threads --version v3 --stats-only
 """
 import argparse
@@ -34,7 +51,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from digital_twin.dataset import EXPORTS, ROOT, VAL_FROM, WAIT, system_prompt
-from digital_twin.telegram import load_exports
+from digital_twin.telegram import QUOTE_CHARS, load_exports
 
 DATASETS = ROOT / "data" / "datasets" / "chat"
 
@@ -46,6 +63,8 @@ MAX_CHAIN = 3
 PREVIOUS_MINE_WITHIN = timedelta(hours=2)  # same session as in v2
 RECENT_MESSAGES = 12
 RECENT_WINDOW = timedelta(minutes=30)
+MAX_INPUT_MESSAGES = 8  # v6: her messages since my last one; more than 4 in a row is rare
+SHORT_CONTEXT = (2, 4)   # v6 augmentation: messages kept in the short-context variant
 
 
 def role(m):
@@ -144,6 +163,74 @@ class Chat:
             yield kind, context, inputs, output
 
 
+    # ── v6: whole exchanges ───────────────────────────────────────────────
+    def say(self, m):
+        """v6 text of a message: a Telegram reply always shows what it replies to."""
+        target = self.by_id.get(m.reply_to)
+        if target is None or not target.text_only:
+            return m.body
+        q = " ".join(target.body.split())
+        q = q if len(q) <= QUOTE_CHARS else q[:QUOTE_CHARS].rstrip() + "…"
+        return f"↪ «{q}» {m.body}"
+
+    def before(self, j):
+        """v6 context: text messages of the last RECENT_WINDOW before position j, WAIT after my bursts."""
+        start = self.messages[j].date
+        before = [m for m in self.messages[max(0, j - 3 * RECENT_MESSAGES):j]
+                  if m.text_only and start - m.date <= RECENT_WINDOW][-RECENT_MESSAGES:]
+        turns = []
+        for k, m in enumerate(before):
+            turns.append({"role": role(m), "content": self.say(m)})
+            if m.from_me and (k + 1 == len(before) or not before[k + 1].from_me):
+                turns.append({"role": "assistant", "content": WAIT})
+        return turns
+
+    def exchanges(self):
+        """(context, her messages, my burst) for every burst of mine that follows her messages."""
+        for i, m in enumerate(self.messages):
+            if not m.from_me or i == 0 or self.messages[i - 1].from_me:
+                continue
+            j = i - 1
+            while j > 0 and not self.messages[j - 1].from_me:
+                j -= 1
+            hers = [x for x in self.messages[j:i] if x.text_only][-MAX_INPUT_MESSAGES:]
+            mine = [m]
+            for x in self.messages[i + 1:]:
+                if not x.from_me or x.date - mine[-1].date > CONTINUE_GAP:
+                    break
+                mine.append(x)
+            mine = [x for x in mine if x.text_only]
+            if hers and mine:
+                yield self.before(j), hers, mine
+
+
+def context_variants(context, rng):
+    """v6 augmentation: the full context, its last 2–4 messages, and none (distinct ones only)."""
+    def last(n):
+        kept, count = [], 0
+        for turn in reversed(context):
+            if turn["content"] != WAIT:
+                if count == n:
+                    break
+                count += 1
+            kept.insert(0, turn)
+        return kept
+    variants = []
+    for ctx in (context, last(rng.randint(*SHORT_CONTEXT)), []):
+        if ctx not in variants:
+            variants.append(ctx)
+    return variants
+
+
+def exchange_example(chat, context, hers, mine):
+    messages = [{"role": "system", "content": system_prompt(mine[0].date), "train": False}]
+    messages += [{**turn, "train": False} for turn in context]
+    messages += [{"role": "user", "content": chat.say(m), "train": False} for m in hers]
+    messages += [{"role": "assistant", "content": chat.say(m), "train": True} for m in mine]
+    messages.append({"role": "assistant", "content": WAIT, "train": True})
+    return {"date": mine[0].date.isoformat(), "kind": "exchange", "messages": messages}
+
+
 def to_example(kind, context, inputs, output):
     messages = [{"role": "system", "content": system_prompt(output[0].date), "train": False}]
     messages += [{**turn, "train": False} for turn in context]
@@ -153,9 +240,17 @@ def to_example(kind, context, inputs, output):
     return {"date": output[0].date.isoformat(), "kind": kind, "messages": messages}
 
 
-def build(version="v5", exports=EXPORTS):
+def build(version="v6", exports=EXPORTS):
     chat = Chat(load_exports(exports))
     splits = {"train": [], "val": []}
+    if version == "v6":
+        rng = random.Random(3407)
+        for context, hers, mine in chat.exchanges():
+            if mine[0].date >= VAL_FROM:
+                splits["val"].append(exchange_example(chat, context, hers, mine))
+            else:
+                splits["train"] += [exchange_example(chat, ctx, hers, mine) for ctx in context_variants(context, rng)]
+        return chat, splits
     for kind, context, inputs, output in chat.threads(version):
         split = "val" if output[0].date >= VAL_FROM else "train"
         splits[split].append(to_example(kind, context, inputs, output))
@@ -178,7 +273,7 @@ def print_stats(chat, splits):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--version", choices=["v3", "v4", "v5"], default="v5")
+    p.add_argument("--version", choices=["v3", "v4", "v5", "v6"], default="v6")
     p.add_argument("--stats-only", action="store_true")
     args = p.parse_args()
     out = DATASETS / args.version
