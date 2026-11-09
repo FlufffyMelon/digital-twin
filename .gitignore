@@ -1,0 +1,24 @@
+# Белый список: в git попадает только код и документация.
+# Переписки, датасеты и веса — личные данные, их здесь быть не должно,
+# поэтому любой файл неизвестного типа игнорируется по умолчанию.
+*
+!*/
+!*.py
+!*.sh
+!*.ipynb
+!*.md
+!requirements*.txt
+!.gitignore
+!.gitattributes
+!mutagen.yml
+!.githooks/*
+
+# Каталоги, в которые git вообще не заглядывает (даже за *.py внутри).
+.venv/
+outputs/
+wandb/
+unsloth_compiled_cache/
+huggingface_tokenizers_cache/
+__pycache__/
+.ipynb_checkpoints/
+.claude/
