@@ -82,19 +82,19 @@ def prepare(n=N_MOMENTS, seed=0):
 
     chat, _ = build()
     moments = []
-    for kind, context, inputs, output in chat.threads():
+    for (kind, context, inputs, output), (_, recent, _, _) in zip(chat.threads("v3"), chat.threads("v4")):
         if output[0].date < VAL_FROM:
             continue
         i = chat.pos[output[0].id]
-        v3 = [{"role": m["role"], "content": m["content"]} for m in to_example(kind, context, inputs, output)["messages"]
-              if not m["train"]]
+        prompt = lambda ctx: [{"role": m["role"], "content": m["content"]}
+                              for m in to_example(kind, ctx, inputs, output)["messages"] if not m["train"]]
         moments.append({
             "kind": kind,
             "date": output[0].date.isoformat(),
             "display": [{"role": "assistant" if m.from_me else "user", "content": m.text}
                         for m in chat.messages[max(0, i - DISPLAY_MESSAGES):i]],
             "target": inputs[0].body if kind == "reply" else None,
-            "inputs": {"v2": v2_context(chat, i), "v3": v3},
+            "inputs": {"v2": v2_context(chat, i), "v3": prompt(context), "v4": prompt(recent)},
             "real": [m.body for m in output],
         })
     random.seed(seed)
@@ -286,7 +286,7 @@ def main():
     g = sub.add_parser("generate")
     g.add_argument("adapter_dir", type=Path)
     g.add_argument("--name", required=True)
-    g.add_argument("--prompt", choices=["v2", "v3"], required=True, help="dataset family the adapter was trained on")
+    g.add_argument("--prompt", choices=["v2", "v3", "v4"], required=True, help="dataset family the adapter was trained on")
     g.add_argument("--v1", action="store_true")
     g.add_argument("--temperature", type=float)
     g.add_argument("--top-p", type=float)

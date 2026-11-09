@@ -73,11 +73,25 @@ def real_history(n):
     return [{"role": t.role, "content": t.content} for t in turns[-n:]] if n else []
 
 
+def recent(conversation, now):
+    """v4 context: the last RECENT_MESSAGES messages of the last RECENT_WINDOW, with their WAIT turns."""
+    from digital_twin.threads import RECENT_MESSAGES, RECENT_WINDOW
+    kept, n = [], 0
+    for date, turn in reversed(conversation):
+        if now - date > RECENT_WINDOW or n == RECENT_MESSAGES:
+            break
+        kept.insert(0, turn)
+        n += turn["content"] != WAIT
+    while kept and kept[0]["content"] == WAIT:
+        kept.pop(0)
+    return kept
+
+
 def interactive(twin, prompt, history=0, **sampling):
-    """v2 models see the whole conversation; v3 models only her new messages and my previous one."""
+    """v2: the whole conversation; v3: her new messages and my previous one; v4: the last half hour."""
     sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
-    start = real_history(history) if prompt == "v2" else []
-    for m in start[-8:]:
+    start = [(datetime.now(), t) for t in real_history(history)] if prompt == "v2" else []
+    for _, m in start[-8:]:
         if m["content"] != WAIT:
             print(f"{'Соня' if m['role'] == 'user' else 'Леша'} (история): {m['content']}")
     print("Пиши сообщения построчно; пустая строка — передать ход. /reset — новый диалог, /exit — выход.")
@@ -92,35 +106,38 @@ def interactive(twin, prompt, history=0, **sampling):
         if line:
             pending.append(line)
             continue
+        now = datetime.now()
         incoming = [{"role": "user", "content": text} for text in pending]
         pending = []
+        turns = [t for _, t in conversation]
         if prompt == "v2":
-            context = conversation
+            context = turns
+        elif prompt == "v3":
+            context = [t for t in turns if t["role"] == "assistant" and t["content"] != WAIT][-1:]
         else:
-            mine = [m for m in conversation if m["role"] == "assistant" and m["content"] != WAIT]
-            context = mine[-1:]
-        messages = [{"role": "system", "content": system_prompt(datetime.now())}] + context + incoming
+            context = recent(conversation, now)
+        messages = [{"role": "system", "content": system_prompt(now)}] + context + incoming
         burst = twin.reply(messages, **sampling)
-        conversation += incoming + [{"role": "assistant", "content": t} for t in burst]
-        conversation.append({"role": "assistant", "content": WAIT})
+        conversation += [(now, t) for t in incoming] + [(now, {"role": "assistant", "content": t}) for t in burst]
+        conversation.append((now, {"role": "assistant", "content": WAIT}))
         for text in burst:
             print(f"Леша: {text}")
         print("Леша: ⏸")
 
 
 def prompt_family(adapter_dir):
-    """v2 or v3, from the training config saved next to the adapter (final/ or the run's final/)."""
+    """v2, v3 or v4, from the training config saved next to the adapter (final/ or the run's final/)."""
     for d in (adapter_dir, adapter_dir.parent / "final"):
         config = d / "digital_twin.json"
         if config.exists():
-            return "v3" if "chat/v3" in json.loads(config.read_text())["data_dir"] else "v2"
-    raise SystemExit("no digital_twin.json found, pass --prompt v2 or v3")
+            return Path(json.loads(config.read_text())["data_dir"]).name
+    raise SystemExit("no digital_twin.json found, pass --prompt")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("adapter_dir", type=Path)
-    p.add_argument("--prompt", choices=["v2", "v3"], help="dataset family; default: from digital_twin.json")
+    p.add_argument("--prompt", choices=["v2", "v3", "v4"], help="dataset family; default: from digital_twin.json")
     p.add_argument("--history", type=int, default=40, help="v2 only: real chat messages to start from (0 — empty chat)")
     p.add_argument("--temperature", type=float, help="default: the model's recommended value")
     args = p.parse_args()

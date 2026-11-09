@@ -1,4 +1,4 @@
-"""Build the v3 dataset: reply threads instead of long conversation windows.
+"""Build the v3/v4 datasets: reply threads instead of long conversation windows.
 
 Long windows mixed several topics at once and the model lost track of what it
 was answering. Here every example is one thread of mine:
@@ -6,13 +6,19 @@ was answering. Here every example is one thread of mine:
     input   what I am answering:
               - the message I replied to with Telegram's reply, or
               - Соня's latest burst, when I started writing without a reply
-    context only what explains the input: the reply chain above it (up to
-            MAX_CHAIN links) or, if there is none, my message right before it
+    context v3: only what explains the input — the reply chain above it (up to
+              MAX_CHAIN links) or, if there is none, my message right before it.
+              Too little: the model missed the mood and the situation and fell back
+              to generic replies (blind test: fooled me in 10% of cases).
+            v4: the live conversation before my answer — the last RECENT_MESSAGES
+              messages, none older than RECENT_WINDOW (90% of my replies target a
+              message within 5 messages and 24 minutes), with WAIT after my bursts;
+              the input comes last, so it is clear what is being answered.
     output  my message and the follow-ups written within CONTINUE_GAP, then WAIT;
             a new reply to Соня starts its own thread
 
-    python -m digital_twin.threads                # build data/datasets/chat/v3
-    python -m digital_twin.threads --stats-only
+    python -m digital_twin.threads --version v4   # build data/datasets/chat/v4
+    python -m digital_twin.threads --version v3 --stats-only
 """
 import argparse
 import json
@@ -25,7 +31,7 @@ from pathlib import Path
 from digital_twin.dataset import EXPORTS, ROOT, VAL_FROM, WAIT, system_prompt
 from digital_twin.telegram import load_exports
 
-OUT_DIR = ROOT / "data" / "datasets" / "chat" / "v3"
+DATASETS = ROOT / "data" / "datasets" / "chat"
 
 CONTINUE_GAP = timedelta(minutes=3)   # 87% of pauses inside my bursts are shorter
 MAX_LATENCY = timedelta(minutes=15)   # a burst started later than this is not an answer to her last message
@@ -33,6 +39,8 @@ INPUT_BURST_GAP = timedelta(minutes=2)
 MAX_INPUT_BURST = 4
 MAX_CHAIN = 3
 PREVIOUS_MINE_WITHIN = timedelta(hours=2)  # same session as in v2
+RECENT_MESSAGES = 12
+RECENT_WINDOW = timedelta(minutes=30)
 
 
 def role(m):
@@ -65,6 +73,22 @@ class Chat:
             return [self.messages[i]]
         return []
 
+    def recent(self, i, inputs):
+        """v4 context: the conversation right before position i, without the input messages."""
+        skip = {m.id for m in inputs}
+        before = [m for m in self.messages[max(0, i - RECENT_MESSAGES - len(skip)):i]
+                  if m.id not in skip and self.messages[i].date - m.date <= RECENT_WINDOW][-RECENT_MESSAGES:]
+        if inputs[0].reply_to and not before:  # an old target: at least its reply chain
+            before = self.chain(inputs[0])
+        turns = []
+        for k, m in enumerate(before):
+            turns.append({"role": role(m), "content": m.text})
+            if m.from_me and k + 1 < len(before) and not before[k + 1].from_me:
+                turns.append({"role": "assistant", "content": WAIT})
+        if turns and turns[-1]["role"] == "assistant" and turns[-1]["content"] != WAIT:
+            turns.append({"role": "assistant", "content": WAIT})  # my burst ended before her input
+        return turns
+
     def her_burst_before(self, i):
         """Соня's messages right before position i (pauses within INPUT_BURST_GAP)."""
         burst = []
@@ -86,8 +110,8 @@ class Chat:
             out.append(m)
         return out
 
-    def threads(self):
-        """(kind, context, input, output) for every thread of mine."""
+    def threads(self, version="v4"):
+        """(kind, context turns, input, output) for every thread of mine."""
         for i, m in enumerate(self.messages):
             if not m.from_me:
                 continue
@@ -100,21 +124,26 @@ class Chat:
                     continue
             else:
                 continue  # a follow-up inside a thread, or a reply to myself
-            yield kind, self.context(inputs[0]), inputs, self.output_from(i)
+            if version == "v3":
+                context = [{"role": role(c), "content": c.body} for c in self.context(inputs[0])]
+            else:
+                context = self.recent(i, inputs)
+            yield kind, context, inputs, self.output_from(i)
 
 
 def to_example(kind, context, inputs, output):
     messages = [{"role": "system", "content": system_prompt(output[0].date), "train": False}]
-    messages += [{"role": role(m), "content": m.body, "train": False} for m in context + inputs]
+    messages += [{**turn, "train": False} for turn in context]
+    messages += [{"role": role(m), "content": m.body, "train": False} for m in inputs]
     messages += [{"role": "assistant", "content": m.body, "train": True} for m in output]
     messages.append({"role": "assistant", "content": WAIT, "train": True})
     return {"date": output[0].date.isoformat(), "kind": kind, "messages": messages}
 
 
-def build(exports=EXPORTS):
+def build(version="v4", exports=EXPORTS):
     chat = Chat(load_exports(exports))
     splits = {"train": [], "val": []}
-    for kind, context, inputs, output in chat.threads():
+    for kind, context, inputs, output in chat.threads(version):
         split = "val" if output[0].date >= VAL_FROM else "train"
         splits[split].append(to_example(kind, context, inputs, output))
     return chat, splits
@@ -136,22 +165,23 @@ def print_stats(chat, splits):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--out", type=Path, default=OUT_DIR)
+    p.add_argument("--version", choices=["v3", "v4"], default="v4")
     p.add_argument("--stats-only", action="store_true")
     args = p.parse_args()
+    out = DATASETS / args.version
 
-    chat, splits = build()
+    chat, splits = build(args.version)
     print_stats(chat, splits)
     if args.stats_only:
         return
-    args.out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     random.seed(3407)
     random.shuffle(splits["train"])
     for name, examples in splits.items():
-        with open(args.out / f"{name}.jsonl", "w", encoding="utf-8") as f:
+        with open(out / f"{name}.jsonl", "w", encoding="utf-8") as f:
             for e in examples:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    print(f"written to {args.out}")
+    print(f"written to {out}")
 
 
 if __name__ == "__main__":
