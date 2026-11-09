@@ -14,10 +14,14 @@ was answering. Here every example is one thread of mine:
               messages, none older than RECENT_WINDOW (90% of my replies target a
               message within 5 messages and 24 minutes), with WAIT after my bursts;
               the input comes last, so it is clear what is being answered.
+            v5: v4 with text only — media ([фото], [стикер], [кружок], …) and
+              forwarded posts are dropped from context, input and output. Threads
+              and pauses are still found on all messages; an example whose input or
+              output has no text left is skipped.
     output  my message and the follow-ups written within CONTINUE_GAP, then WAIT;
             a new reply to Соня starts its own thread
 
-    python -m digital_twin.threads --version v4   # build data/datasets/chat/v4
+    python -m digital_twin.threads --version v5   # build data/datasets/chat/v5
     python -m digital_twin.threads --version v3 --stats-only
 """
 import argparse
@@ -73,16 +77,17 @@ class Chat:
             return [self.messages[i]]
         return []
 
-    def recent(self, i, inputs):
-        """v4 context: the conversation right before position i, without the input messages."""
+    def recent(self, i, inputs, text_only=False):
+        """v4/v5 context: the conversation right before position i, without the input messages."""
         skip = {m.id for m in inputs}
-        before = [m for m in self.messages[max(0, i - RECENT_MESSAGES - len(skip)):i]
-                  if m.id not in skip and self.messages[i].date - m.date <= RECENT_WINDOW][-RECENT_MESSAGES:]
+        keep = (lambda m: m.text_only) if text_only else (lambda m: True)
+        before = [m for m in self.messages[max(0, i - 3 * RECENT_MESSAGES):i]
+                  if m.id not in skip and keep(m) and self.messages[i].date - m.date <= RECENT_WINDOW][-RECENT_MESSAGES:]
         if inputs[0].reply_to and not before:  # an old target: at least its reply chain
-            before = self.chain(inputs[0])
+            before = [m for m in self.chain(inputs[0]) if keep(m)]
         turns = []
         for k, m in enumerate(before):
-            turns.append({"role": role(m), "content": m.text})
+            turns.append({"role": role(m), "content": m.quoted if text_only else m.text})
             if m.from_me and k + 1 < len(before) and not before[k + 1].from_me:
                 turns.append({"role": "assistant", "content": WAIT})
         if turns and turns[-1]["role"] == "assistant" and turns[-1]["content"] != WAIT:
@@ -124,11 +129,18 @@ class Chat:
                     continue
             else:
                 continue  # a follow-up inside a thread, or a reply to myself
+            output = self.output_from(i)
             if version == "v3":
                 context = [{"role": role(c), "content": c.body} for c in self.context(inputs[0])]
-            else:
+            elif version == "v4":
                 context = self.recent(i, inputs)
-            yield kind, context, inputs, self.output_from(i)
+            else:
+                context = self.recent(i, inputs, text_only=True)
+                inputs = [m for m in inputs if m.text_only]
+                output = [m for m in output if m.text_only]
+                if not inputs or not output:
+                    continue
+            yield kind, context, inputs, output
 
 
 def to_example(kind, context, inputs, output):
@@ -140,7 +152,7 @@ def to_example(kind, context, inputs, output):
     return {"date": output[0].date.isoformat(), "kind": kind, "messages": messages}
 
 
-def build(version="v4", exports=EXPORTS):
+def build(version="v5", exports=EXPORTS):
     chat = Chat(load_exports(exports))
     splits = {"train": [], "val": []}
     for kind, context, inputs, output in chat.threads(version):
@@ -165,7 +177,7 @@ def print_stats(chat, splits):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--version", choices=["v3", "v4"], default="v4")
+    p.add_argument("--version", choices=["v3", "v4", "v5"], default="v5")
     p.add_argument("--stats-only", action="store_true")
     args = p.parse_args()
     out = DATASETS / args.version

@@ -47,6 +47,8 @@ class Message:
     text: str            # with a quote when it replies to an older message (v2 windows)
     body: str            # without the quote (v3 threads show the replied message itself)
     reply_to: int | None  # id of the replied message, if it is in the export
+    text_only: bool      # my/her own text: no media, no forwarded post (v5 keeps only these)
+    quoted: str          # body with a quote only when the quoted message is text_only
 
 
 def _truncate(text, limit):
@@ -61,6 +63,17 @@ def _entities_text(msg):
     for pattern, placeholder in MASKS:
         text = pattern.sub(placeholder, text)
     return text.strip()
+
+
+def _is_text_only(msg):
+    """Own text: no media, not forwarded, and not just a shared link (or phone, email…)."""
+    media_keys = ("media_type", "photo", "file", "poll", "location_information", "contact_information")
+    if any(k in msg for k in media_keys) or "forwarded_from" in msg:
+        return False
+    text = _entities_text(msg)
+    for placeholder in {*ENTITY_PLACEHOLDERS.values(), *(p for _, p in MASKS)}:
+        text = text.replace(placeholder, "")
+    return bool(text.strip())
 
 
 def _render(msg):
@@ -110,11 +123,13 @@ def load_export(path):
     position = {m["id"]: i for i, (m, _) in enumerate(rendered)}
     messages = []
     for i, (m, body) in enumerate(rendered):
-        text = body
+        text = quoted = body
         target = position.get(m.get("reply_to_message_id"))
         if target is not None and i - target > REPLY_NEARBY:
             quote = " ".join(rendered[target][1].split())
             text = f"↪ «{_truncate(quote, QUOTE_CHARS)}» {body}"
+            if _is_text_only(rendered[target][0]):
+                quoted = text
         messages.append(Message(
             id=m["id"],
             date=datetime.fromisoformat(m["date"]),  # local time of the export, machine-independent
@@ -122,6 +137,8 @@ def load_export(path):
             text=text,
             body=body,
             reply_to=m["reply_to_message_id"] if target is not None else None,
+            text_only=_is_text_only(m),
+            quoted=quoted,
         ))
     return messages
 
