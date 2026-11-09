@@ -13,6 +13,8 @@ from unsloth import FastModel  # must be imported before transformers
 import argparse
 import json
 import random
+import readline  # noqa: F401 -- UTF-8-aware line editing for input(); srun --pty ttys lack iutf8
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -65,6 +67,7 @@ class Twin:
 
 
 def interactive(twin):
+    sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
     messages = [{"role": "system", "content": system_prompt(datetime.now())}]
     print("Пиши сообщения построчно; пустая строка — передать ход. /reset — новый диалог, /exit — выход.")
     pending = []
