@@ -14,8 +14,9 @@ was answering. Here every example is one thread of mine:
               messages, none older than RECENT_WINDOW (90% of my replies target a
               message within 5 messages and 24 minutes), with WAIT after my bursts;
               the input comes last, so it is clear what is being answered.
-            v5: v4 with text only — media ([фото], [стикер], [кружок], …) and
-              forwarded posts are dropped from context, input and output. Threads
+            v5: v4 with text only — media ([фото], [кружок], [голосовое], …),
+              forwarded posts and bare links are dropped from context, input and
+              output; stickers stay as [стикер 😂]. Threads
               and pauses are still found on all messages; an example whose input or
               output has no text left is skipped.
     output  my message and the follow-ups written within CONTINUE_GAP, then WAIT;

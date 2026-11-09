@@ -11,8 +11,8 @@ system's, in random order, and guesses which one is real.
     fool rate = how often the judge takes the generated reply for mine
                 50% — indistinguishable, 0% — always caught
 
-    python -m digital_twin.evaluate prepare                    # fix the moments (local, stdlib)
-    python -m digital_twin.evaluate generate outputs/<run>/final --prompt v3 --name gemma --temperature 0.7   # GPU
+    python -m digital_twin.evaluate prepare --version v5       # fix the moments (local, stdlib)
+    python -m digital_twin.evaluate generate outputs/<run>/final --prompt v5 --name gemma --temperature 0.7   # GPU
     python -m digital_twin.evaluate judge gemma v1             # GPU (A100), local judge model
     python -m digital_twin.evaluate blind gemma                # you are the judge (local, stdlib)
     python -m digital_twin.evaluate report                     # all results side by side
@@ -26,7 +26,7 @@ import random
 import statistics
 from pathlib import Path
 
-from digital_twin.dataset import CHARS_PER_TOKEN, ROOT, SESSION_GAP, TOKENS_PER_TURN, VAL_FROM, WAIT, system_prompt
+from digital_twin.dataset import ROOT, VAL_FROM, WAIT
 
 EVAL_DIR = ROOT / "data" / "eval"
 MOMENTS = EVAL_DIR / "moments.jsonl"
@@ -34,7 +34,6 @@ N_MOMENTS = 200
 # Full Qwen3.8-27B already downloaded on mipt (quantized to 4 bit on load); override with DT_JUDGE_MODEL.
 JUDGE_MODEL = os.environ.get("DT_JUDGE_MODEL", str(Path.home() / "models" / "qwen3.8-27b"))
 DISPLAY_MESSAGES = 12  # chat shown to the judge and to me
-V2_CONTEXT_TOKENS = 1400  # like the windows the v2 models were trained on
 SHUFFLED = "shuffled_real"  # sanity system: my real reply from another moment
 
 
@@ -56,45 +55,27 @@ def candidates_path(name):
 
 # ── prepare ────────────────────────────────────────────────────────────────
 
-def v2_context(chat, i):
-    """The conversation window a v2 model saw in training: the session so far, WAIT after my bursts."""
-    start = i
-    while start > 0 and chat.messages[start].date - chat.messages[start - 1].date <= SESSION_GAP:
-        start -= 1
-    turns = []
-    before = chat.messages[start:i]
-    for k, m in enumerate(before):
-        turns.append({"role": "assistant" if m.from_me else "user", "content": m.text})
-        if m.from_me and k + 1 < len(before) and not before[k + 1].from_me:
-            turns.append({"role": "assistant", "content": WAIT})
-    budget, kept = V2_CONTEXT_TOKENS, []
-    for t in reversed(turns):
-        budget -= len(t["content"]) / CHARS_PER_TOKEN + TOKENS_PER_TURN
-        if budget < 0:
-            break
-        kept.insert(0, t)
-    first = chat.messages[max(start, i - len(kept))].date
-    return [{"role": "system", "content": system_prompt(first)}] + kept
+def prepare(version="v5", n=N_MOMENTS, seed=0):
+    """Moments at the starts of my threads in the validation weeks of a thread dataset (v3/v4/v5)."""
+    from digital_twin.threads import build, to_example
 
-
-def prepare(n=N_MOMENTS, seed=0):
-    from digital_twin.threads import Chat, build, to_example
-
-    chat, _ = build()
+    chat, _ = build(version)
+    shown = (lambda m: m.text_only) if version == "v5" else (lambda m: True)
     moments = []
-    for (kind, context, inputs, output), (_, recent, _, _) in zip(chat.threads("v3"), chat.threads("v4")):
+    for kind, context, inputs, output in chat.threads(version):
         if output[0].date < VAL_FROM:
             continue
         i = chat.pos[output[0].id]
-        prompt = lambda ctx: [{"role": m["role"], "content": m["content"]}
-                              for m in to_example(kind, ctx, inputs, output)["messages"] if not m["train"]]
+        display = [m for m in chat.messages[max(0, i - 3 * DISPLAY_MESSAGES):i] if shown(m)][-DISPLAY_MESSAGES:]
+        prompt = [{"role": m["role"], "content": m["content"]}
+                  for m in to_example(kind, context, inputs, output)["messages"] if not m["train"]]
         moments.append({
             "kind": kind,
             "date": output[0].date.isoformat(),
-            "display": [{"role": "assistant" if m.from_me else "user", "content": m.text}
-                        for m in chat.messages[max(0, i - DISPLAY_MESSAGES):i]],
+            "display": [{"role": "assistant" if m.from_me else "user",
+                         "content": m.quoted if version == "v5" else m.text} for m in display],
             "target": inputs[0].body if kind == "reply" else None,
-            "inputs": {"v2": v2_context(chat, i), "v3": prompt(context), "v4": prompt(recent)},
+            "inputs": {version: prompt},
             "real": [m.body for m in output],
         })
     random.seed(seed)
@@ -108,7 +89,7 @@ def prepare(n=N_MOMENTS, seed=0):
     random.shuffle(shuffled)
     write_jsonl(candidates_path(SHUFFLED),
                 [{"id": m["id"], "reply": shuffled[i]} for i, m in enumerate(moments)])
-    print(f"{len(moments)} moments written to {MOMENTS} ({sum(m['kind'] == 'reply' for m in moments)} replies)")
+    print(f"{len(moments)} {version} moments written to {MOMENTS} ({sum(m['kind'] == 'reply' for m in moments)} replies)")
 
 
 # ── generate ───────────────────────────────────────────────────────────────
@@ -282,11 +263,12 @@ def report(names=None):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("prepare")
+    pr = sub.add_parser("prepare")
+    pr.add_argument("--version", choices=["v3", "v4", "v5"], default="v5")
     g = sub.add_parser("generate")
     g.add_argument("adapter_dir", type=Path)
     g.add_argument("--name", required=True)
-    g.add_argument("--prompt", choices=["v2", "v3", "v4"], required=True, help="dataset family the adapter was trained on")
+    g.add_argument("--prompt", choices=["v2", "v3", "v4", "v5"], required=True, help="dataset family the adapter was trained on")
     g.add_argument("--v1", action="store_true")
     g.add_argument("--temperature", type=float)
     g.add_argument("--top-p", type=float)
@@ -301,7 +283,7 @@ def main():
     args = p.parse_args()
 
     if args.cmd == "prepare":
-        prepare()
+        prepare(args.version)
     elif args.cmd == "generate":
         sampling = {k: v for k, v in (("temperature", args.temperature), ("top_p", args.top_p),
                                       ("min_p", args.min_p)) if v is not None}

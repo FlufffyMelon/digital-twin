@@ -47,7 +47,7 @@ class Message:
     text: str            # with a quote when it replies to an older message (v2 windows)
     body: str            # without the quote (v3 threads show the replied message itself)
     reply_to: int | None  # id of the replied message, if it is in the export
-    text_only: bool      # my/her own text: no media, no forwarded post (v5 keeps only these)
+    text_only: bool      # own text or a sticker: no other media, no forwarded post (v5 keeps only these)
     quoted: str          # body with a quote only when the quoted message is text_only
 
 
@@ -66,9 +66,13 @@ def _entities_text(msg):
 
 
 def _is_text_only(msg):
-    """Own text: no media, not forwarded, and not just a shared link (or phone, email…)."""
+    """Own text or a sticker: no other media, not forwarded, and not just a shared link (or phone, email…)."""
+    if "forwarded_from" in msg:
+        return False
+    if msg.get("media_type") == "sticker":
+        return True  # rendered as [стикер 😂] — part of how I write
     media_keys = ("media_type", "photo", "file", "poll", "location_information", "contact_information")
-    if any(k in msg for k in media_keys) or "forwarded_from" in msg:
+    if any(k in msg for k in media_keys):
         return False
     text = _entities_text(msg)
     for placeholder in {*ENTITY_PLACEHOLDERS.values(), *(p for _, p in MASKS)}:

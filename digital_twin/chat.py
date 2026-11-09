@@ -88,7 +88,7 @@ def recent(conversation, now):
 
 
 def interactive(twin, prompt, history=0, **sampling):
-    """v2: the whole conversation; v3: her new messages and my previous one; v4: the last half hour."""
+    """v2: the whole conversation; v3: her new messages and my previous one; v4/v5: the last half hour."""
     sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
     start = [(datetime.now(), t) for t in real_history(history)] if prompt == "v2" else []
     for _, m in start[-8:]:
@@ -137,7 +137,7 @@ def prompt_family(adapter_dir):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("adapter_dir", type=Path)
-    p.add_argument("--prompt", choices=["v2", "v3", "v4"], help="dataset family; default: from digital_twin.json")
+    p.add_argument("--prompt", choices=["v2", "v3", "v4", "v5"], help="dataset family; default: from digital_twin.json")
     p.add_argument("--history", type=int, default=40, help="v2 only: real chat messages to start from (0 — empty chat)")
     p.add_argument("--temperature", type=float, help="default: the model's recommended value")
     args = p.parse_args()
