@@ -1,8 +1,13 @@
 import json
 import os
 import random
+from pathlib import Path
 
-with open("result_splited.json", "r", encoding="utf-8") as f:
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+MESSAGES_PATH = DATA_DIR / "processed" / "messages_2025-05-03.json"
+DATASET_PATH = DATA_DIR / "datasets" / "manual" / "qa_manual_context.json"
+
+with open(MESSAGES_PATH, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 context_window = 10
@@ -14,8 +19,8 @@ for i, message in enumerate(data):
     if message["from"] == "Соня" and '?' in message["text"]:
         all_question_ids.append(i)
 
-if os.path.exists("dataset.json"):
-    with open("dataset.json", "r", encoding="utf-8") as f:
+if os.path.exists(DATASET_PATH):
+    with open(DATASET_PATH, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 else:
     dataset = []
@@ -48,7 +53,7 @@ for i, id in enumerate(question_ids):
 
     if len(inp) == 1:
         if inp[0] == '-1':
-            with open("dataset.json", "w", encoding="utf-8") as f:
+            with open(DATASET_PATH, "w", encoding="utf-8") as f:
                 json.dump(dataset, f, ensure_ascii=False, indent=2)
             exit()
         elif inp[0] == '0':
@@ -62,7 +67,7 @@ for i, id in enumerate(question_ids):
 
             if len(inp) == 1:
                 if inp[0] == '-1':
-                    with open("dataset.json", "w", encoding="utf-8") as f:
+                    with open(DATASET_PATH, "w", encoding="utf-8") as f:
                         json.dump(dataset, f, ensure_ascii=False, indent=2)
                     exit()
                 elif inp[0] == '0':
@@ -78,7 +83,7 @@ for i, id in enumerate(question_ids):
     }
     dataset.append(new_data)
 
-    with open("dataset.json", "w", encoding="utf-8") as f:
+    with open(DATASET_PATH, "w", encoding="utf-8") as f:
         json.dump(dataset, f, ensure_ascii=False, indent=2)
 
     print('-'*50 + '\n')

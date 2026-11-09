@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=digitaltwin
-#SBATCH --partition=AMD7763-A100-CCP    # A100 80GB, node208-24; Ada: sbatch -p AMD7V12-RTX4500-CCP run.sh
+#SBATCH --output=logs/%x-%j.out     # submit from the repo root: sbatch slurm/train.sh
+#SBATCH --partition=AMD7763-A100-CCP    # A100 80GB, node208-24; Ada: sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1              # Request 1 GPU

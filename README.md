@@ -15,25 +15,30 @@
 
 ## Структура
 
-| Файл | Что делает |
-|---|---|
-| `data_proccess.ipynb` | Ранний прототип: разметка диалога в пары вопрос/ответ через Ollama |
-| `data_proccesing.ipynb` | Разбор экспорта Telegram (`result.json`) и сборка вариантов датасета: alpaca, по reply-цепочкам, с контекстом |
-| `llm_proccesing.ipynb` | Попытка автоматически отбирать ответы на вопросы с помощью Llama-3.1-8B-Instruct |
-| `create_dataset.py` | Интерактивная ручная разметка: выбор правильных ответов на вопросы собеседника |
-| `finetune.ipynb` | Черновик обучения в ноутбуке |
-| `train.py` | Обучение LoRA (основной скрипт) |
-| `inference.ipynb` | Генерация ответов обученным адаптером, интерактивный чат |
-| `run.sh`, `jupyter.sh` | slurm-скрипты обучения и Jupyter Lab |
-| `pyproject.toml`, `uv.lock` | Окружение (uv) |
-| `scripts/nbstrip.py` | Очистка выводов ноутбуков (git-фильтр и проверка в хуке) |
-| `mutagen.yml` | Синхронизация кода и данных с кластером |
+```
+├── data/                     переписки и датасеты (не в git, кроме data/README.md)
+├── notebooks/
+│   ├── data_processing.ipynb   разбор экспорта Telegram и сборка всех вариантов датасета
+│   ├── llm_processing.ipynb    попытка отбирать ответы на вопросы с помощью Llama-3.1-8B-Instruct
+│   ├── ollama_prototype.ipynb  ранний прототип: разметка диалога в пары вопрос/ответ через Ollama
+│   ├── finetune.ipynb          черновик обучения в ноутбуке
+│   └── inference.ipynb         генерация ответов адаптером, интерактивный чат
+├── scripts/
+│   ├── create_dataset.py       интерактивная ручная разметка ответов на вопросы
+│   └── nbstrip.py              очистка выводов ноутбуков (git-фильтр и проверка в хуке)
+├── slurm/
+│   ├── train.sh                обучение (`train.py`)
+│   └── jupyter.sh              Jupyter Lab на GPU-узле
+├── train.py                  обучение LoRA (основной скрипт)
+├── logs/                     логи slurm (не в git)
+├── outputs/, wandb/          чекпоинты и логи обучения — только на кластере
+├── pyproject.toml, uv.lock   окружение
+└── mutagen.yml               синхронизация с кластером
+```
 
-Данные лежат рядом с кодом, но в git не попадают:
-
-- `result*.json` — экспорт чата из Telegram и его разбор;
-- `dataset*.json`, `conversation_dialog.json` — собранные датасеты;
-- `outputs/`, `wandb/` — чекпоинты и логи, существуют только на кластере.
+Что лежит в `data/` и как каждый файл получен — в [`data/README.md`](data/README.md).
+Скрипты и `sbatch` запускаются из корня репозитория, ноутбуки — из `notebooks/`
+(пути к данным в них вида `../data/...`).
 
 ## Окружение
 
@@ -79,13 +84,13 @@ mutagen project terminate  # остановить
 
 Кластер — mipt, GPU-узлы:
 
-- `node208-24`: A100 80GB, раздел `AMD7763-A100-CCP` — по умолчанию в `run.sh`;
-- `node211-22`: RTX 4500 Ada 24GB, раздел `AMD7V12-RTX4500-CCP` — по умолчанию в `jupyter.sh`.
+- `node208-24`: A100 80GB, раздел `AMD7763-A100-CCP` — по умолчанию в `slurm/train.sh`;
+- `node211-22`: RTX 4500 Ada 24GB, раздел `AMD7V12-RTX4500-CCP` — по умолчанию в `slurm/jupyter.sh`.
 
 ```bash
-sbatch run.sh                              # обучение на A100
-sbatch -p AMD7V12-RTX4500-CCP run.sh       # обучение на Ada
-sbatch jupyter.sh                          # Jupyter Lab
+sbatch slurm/train.sh                              # обучение на A100
+sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh       # обучение на Ada
+sbatch slurm/jupyter.sh                            # Jupyter Lab
 ```
 
 Лучший чекпоинт v1 (`run_20250506_194631/checkpoint-2300`, eval_loss 0.720)

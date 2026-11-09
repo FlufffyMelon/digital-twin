@@ -14,7 +14,7 @@ import datetime
 
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
-# os.environ["WANDB_MODE"] = "offline" # We will manage this in run.sh or TrainingArguments
+# os.environ["WANDB_MODE"] = "offline" # We will manage this in slurm/train.sh or TrainingArguments
 # os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 max_seq_length = 2048 # Choose any! We auto support RoPE Scaling internally!
@@ -112,7 +112,7 @@ def custom_formatting_prompts_func(examples):
 
 
 # dataset = load_dataset("yahma/alpaca-cleaned", split = "train")
-dataset = load_dataset('json', data_files="dataset_context_min_max_long_output.json", split="train")
+dataset = load_dataset('json', data_files="data/datasets/reply/reply_context.json", split="train")
 dataset = dataset.map(custom_formatting_prompts_func, batched = True,)
 
 # Split the dataset (e.g., 90% train, 10% validation)
