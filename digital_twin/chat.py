@@ -20,18 +20,19 @@ from pathlib import Path
 import torch
 
 from digital_twin.chat_format import encode_prompt, end_token_id, format_of
+from digital_twin.conversation import recent
 from digital_twin.dataset import WAIT, system_prompt
 
 MAX_MESSAGES = 8  # safety cap on one burst
 
 
 class Twin:
-    def __init__(self, adapter_dir, max_length=2048):
+    def __init__(self, adapter_dir, max_length=2048, load_in_4bit=False):
         # Works for final/ and for any intermediate checkpoint-N/.
         with open(Path(adapter_dir) / "adapter_config.json") as f:
             self.fmt = format_of(json.load(f)["base_model_name_or_path"])
         self.model, processor = FastModel.from_pretrained(
-            model_name=str(adapter_dir), max_seq_length=max_length, load_in_4bit=False,
+            model_name=str(adapter_dir), max_seq_length=max_length, load_in_4bit=load_in_4bit,
         )
         FastModel.for_inference(self.model)
         self.tokenizer = getattr(processor, "tokenizer", processor)
@@ -73,20 +74,6 @@ def real_history(n):
     return [{"role": t.role, "content": t.content} for t in turns[-n:]] if n else []
 
 
-def recent(conversation, now):
-    """v4 context: the last RECENT_MESSAGES messages of the last RECENT_WINDOW, with their WAIT turns."""
-    from digital_twin.threads import RECENT_MESSAGES, RECENT_WINDOW
-    kept, n = [], 0
-    for date, turn in reversed(conversation):
-        if now - date > RECENT_WINDOW or n == RECENT_MESSAGES:
-            break
-        kept.insert(0, turn)
-        n += turn["content"] != WAIT
-    while kept and kept[0]["content"] == WAIT:
-        kept.pop(0)
-    return kept
-
-
 def interactive(twin, prompt, history=0, **sampling):
     """v2: the whole conversation; v3: her new messages and my previous one; v4/v5: the last half hour."""
     sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
@@ -126,7 +113,7 @@ def interactive(twin, prompt, history=0, **sampling):
 
 
 def prompt_family(adapter_dir):
-    """v2, v3 or v4, from the training config saved next to the adapter (final/ or the run's final/)."""
+    """Dataset family (v2…v5), from the training config saved next to the adapter (final/ or the run's final/)."""
     for d in (adapter_dir, adapter_dir.parent / "final"):
         config = d / "digital_twin.json"
         if config.exists():
@@ -140,12 +127,13 @@ def main():
     p.add_argument("--prompt", choices=["v2", "v3", "v4", "v5"], help="dataset family; default: from digital_twin.json")
     p.add_argument("--history", type=int, default=40, help="v2 only: real chat messages to start from (0 — empty chat)")
     p.add_argument("--temperature", type=float, help="default: the model's recommended value")
+    p.add_argument("--load-in-4bit", action="store_true", help="e.g. a 12B model on a 24 GB GPU")
     args = p.parse_args()
 
     sampling = {"temperature": args.temperature} if args.temperature is not None else {}
     prompt = args.prompt or prompt_family(args.adapter_dir)
     print(f"prompt format: {prompt}")
-    interactive(Twin(args.adapter_dir), prompt, args.history, **sampling)
+    interactive(Twin(args.adapter_dir, load_in_4bit=args.load_in_4bit), prompt, args.history, **sampling)
 
 
 if __name__ == "__main__":

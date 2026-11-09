@@ -23,6 +23,9 @@
 │   ├── chat_format.py          рендер в формат Gemma 4 / Qwen3.5 с маской loss по репликам
 │   ├── train.py                LoRA через unsloth
 │   ├── chat.py                 генерация «сообщение за сообщением до <wait>», интерактивный чат
+│   ├── conversation.py         живой контекст для чатов: последние полчаса + новые сообщения (stdlib)
+│   ├── server.py               HTTP-сервер модели на GPU-узле (для бота)
+│   ├── bot.py                  Telegram-бот, работает на ноутбуке (stdlib)
 │   ├── evaluate.py             тест Тьюринга: судья (Qwen3.8-27B) и слепой тест на отложенных неделях
 │   └── persona.py              черновик карточки «о себе» из переписки
 ├── data/                     переписки и датасеты (не в git, кроме data/README.md)
@@ -37,6 +40,7 @@
 │   └── nbstrip.py              очистка выводов ноутбуков (git-фильтр и проверка в хуке)
 ├── slurm/
 │   ├── train.sh                обучение (`python -m digital_twin.train`)
+│   ├── serve.sh                сервер модели для бота
 │   └── jupyter.sh              Jupyter Lab на GPU-узле
 ├── legacy/train_v1.py        обучение v1 (Llama-3.1-8B, TRL 0.15, на новом стеке не запускается)
 ├── logs/                     логи slurm (не в git)
@@ -107,3 +111,27 @@ sbatch slurm/jupyter.sh                            # Jupyter Lab
 
 Лучший чекпоинт v1 (`run_20250506_194631/checkpoint-2300`, eval_loss 0.720)
 лежит на mipt в `outputs/v1_run_20250506_194631/` как точка сравнения.
+
+## Telegram-бот
+
+С mipt Telegram недоступен, поэтому модель работает на GPU-узле, а бот — на
+ноутбуке и ходит к ней через SSH-туннель (адрес узла сервер пишет в
+`logs/serve.addr`, mutagen приносит его на ноутбук).
+
+1. Создать бота у `@BotFather` (`/newbot`) и положить в `.env` в корне репозитория
+   (в git и на кластер не попадает):
+
+   ```
+   TELEGRAM_TOKEN=123456:ABC...
+   ALLOWED_USERS=111111111,222222222
+   ```
+
+   Свой ID бот покажет по `/start`, даже если его ещё нет в списке.
+2. На mipt запустить сервер модели (держит GPU, пока работает):
+
+   ```bash
+   sbatch slurm/serve.sh outputs/gemma-4-12b_v5/final --load-in-4bit
+   ```
+
+3. На ноутбуке: `python3 -m digital_twin.bot`. Команды в чате: `/reset`, `/temp 0.8`, `/help`.
+4. Остановить: Ctrl+C в боте и `scancel` задачи `dt-serve`.
