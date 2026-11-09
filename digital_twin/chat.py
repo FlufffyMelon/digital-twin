@@ -3,8 +3,8 @@
 The model writes a message, sees it in the context, and either writes the next
 one or answers WAIT, after which it stays silent until a new message arrives.
 
-    python -m digital_twin.chat outputs/<run>/final              # interactive
-    python -m digital_twin.chat outputs/<run>/final --eval 30    # held-out moments vs. what I actually wrote
+    python -m digital_twin.chat outputs/<run>/final                       # starts from the last 40 real messages
+    python -m digital_twin.chat outputs/<run>/final --history 0 --temperature 0.6
 
 Interactive: every line is one message from Соня; an empty line hands the turn over.
 """
@@ -12,7 +12,6 @@ from unsloth import FastModel  # must be imported before transformers
 
 import argparse
 import json
-import random
 import readline  # noqa: F401 -- UTF-8-aware line editing for input(); srun --pty ttys lack iutf8
 import sys
 from datetime import datetime
@@ -21,7 +20,7 @@ from pathlib import Path
 import torch
 
 from digital_twin.chat_format import encode_prompt, end_token_id, format_of
-from digital_twin.dataset import OUT_DIR, WAIT, system_prompt
+from digital_twin.dataset import WAIT, system_prompt
 
 MAX_MESSAGES = 8  # safety cap on one burst
 
@@ -66,70 +65,48 @@ class Twin:
         return burst
 
 
-def interactive(twin):
+def real_history(n):
+    """My last n real chat turns (with WAIT turns), so the model knows what is going on."""
+    from digital_twin.dataset import EXPORTS, add_wait_turns, split_sessions
+    from digital_twin.telegram import load_exports
+    turns = [t for s in split_sessions(load_exports(EXPORTS)) for t in add_wait_turns(s).turns]
+    return [{"role": t.role, "content": t.content} for t in turns[-n:]] if n else []
+
+
+def interactive(twin, history=0, **sampling):
     sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
-    messages = [{"role": "system", "content": system_prompt(datetime.now())}]
+    start = [{"role": "system", "content": system_prompt(datetime.now())}] + real_history(history)
+    for m in start[-8:]:
+        if m["role"] != "system" and m["content"] != WAIT:
+            print(f"{'Соня' if m['role'] == 'user' else 'Леша'} (история): {m['content']}")
     print("Пиши сообщения построчно; пустая строка — передать ход. /reset — новый диалог, /exit — выход.")
-    pending = []
+    messages, pending = list(start), []
     while True:
         line = input("Соня: ").strip()
         if line == "/exit":
             return
         if line == "/reset":
-            messages, pending = messages[:1], []
+            messages, pending = list(start), []
             continue
         if line:
             pending.append(line)
             continue
         messages += [{"role": "user", "content": text} for text in pending]
         pending = []
-        for text in twin.reply(messages):
+        for text in twin.reply(messages, **sampling):
             print(f"Леша: {text}")
         print("Леша: ⏸")
-
-
-def evaluate(twin, n, out_path):
-    """Generate at moments right after Соня's bursts in the validation split."""
-    with open(OUT_DIR / "val.jsonl", encoding="utf-8") as f:
-        examples = [json.loads(line) for line in f]
-    moments = []
-    for e in examples:
-        msgs = e["messages"]
-        for i in range(1, len(msgs)):
-            if msgs[i - 1]["role"] == "user" and msgs[i]["role"] == "assistant":
-                real = []
-                for m in msgs[i:]:
-                    if m["role"] != "assistant" or m["content"] == WAIT:
-                        break
-                    real.append(m["content"])
-                moments.append((msgs[:i], real))
-    random.seed(0)
-    lines = []
-    for context, real in random.sample(moments, min(n, len(moments))):
-        generated = twin.reply([dict(m) for m in context])
-        lines.append("### Контекст\n")
-        lines += [f"- {'Соня' if m['role'] == 'user' else 'Леша'}: {m['content']}"
-                  for m in context[-8:] if m["role"] != "system" and m["content"] != WAIT]
-        lines.append("\n**Как было:**\n")
-        lines += [f"> {t}" for t in real] or ["> ⏸"]
-        lines.append("\n**Модель:**\n")
-        lines += [f"> {t}" for t in generated] or ["> ⏸"]
-        lines.append("\n---\n")
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"{len(lines)} lines written to {out_path}")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("adapter_dir", type=Path)
-    p.add_argument("--eval", type=int, metavar="N", help="sample N held-out moments instead of chatting")
+    p.add_argument("--history", type=int, default=40, help="real chat messages to start from (0 — empty chat)")
+    p.add_argument("--temperature", type=float, help="default: the model's recommended value")
     args = p.parse_args()
 
-    twin = Twin(args.adapter_dir)
-    if args.eval:
-        evaluate(twin, args.eval, args.adapter_dir / "samples.md")
-    else:
-        interactive(twin)
+    sampling = {"temperature": args.temperature} if args.temperature is not None else {}
+    interactive(Twin(args.adapter_dir), args.history, **sampling)
 
 
 if __name__ == "__main__":

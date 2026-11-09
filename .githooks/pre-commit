@@ -19,6 +19,14 @@ for f in $files; do
             ;;
     esac
 
+    case "$f" in
+        data/README.md) ;;
+        data/*|outputs/*|logs/*)
+            echo "pre-commit: файл из каталога с личными данными: $f" >&2
+            fail=1
+            ;;
+    esac
+
     size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
     if [ "$size" -gt "$MAX_BYTES" ]; then
         echo "pre-commit: файл больше 1 МБ: $f ($size байт)" >&2

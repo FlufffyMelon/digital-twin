@@ -35,6 +35,7 @@ def parse_args():
     p.add_argument("--grad-accum", type=int, default=4)
     p.add_argument("--warmup-steps", type=int, default=15)  # ~5% of a 2-epoch run
     p.add_argument("--eval-steps", type=int, default=50)
+    p.add_argument("--save-total-limit", type=int, default=2, help="0 — keep every checkpoint")
     return p.parse_args()
 
 
@@ -105,7 +106,7 @@ def main():
             eval_steps=args.eval_steps,
             save_strategy="steps",
             save_steps=args.eval_steps,
-            save_total_limit=2,
+            save_total_limit=args.save_total_limit or None,
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             seed=3407,

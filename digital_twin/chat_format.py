@@ -43,7 +43,10 @@ FORMATS = {
 # --model name -> (base model, chat format)
 MODELS = {
     "gemma-4-e4b": ("unsloth/gemma-4-E4B-it", "gemma4"),
+    "gemma-4-e4b-base": ("unsloth/gemma-4-E4B", "gemma4"),
+    "gemma-4-12b": ("unsloth/gemma-4-12b-it", "gemma4"),
     "qwen3.5-4b": ("unsloth/Qwen3.5-4B", "qwen3_5"),
+    "qwen3.5-9b": ("unsloth/Qwen3.5-9B", "qwen3_5"),
 }
 
 
