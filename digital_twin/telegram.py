@@ -44,7 +44,9 @@ class Message:
     id: int
     date: datetime
     from_me: bool
-    text: str
+    text: str            # with a quote when it replies to an older message (v2 windows)
+    body: str            # without the quote (v3 threads show the replied message itself)
+    reply_to: int | None  # id of the replied message, if it is in the export
 
 
 def _truncate(text, limit):
@@ -107,16 +109,19 @@ def load_export(path):
 
     position = {m["id"]: i for i, (m, _) in enumerate(rendered)}
     messages = []
-    for i, (m, text) in enumerate(rendered):
+    for i, (m, body) in enumerate(rendered):
+        text = body
         target = position.get(m.get("reply_to_message_id"))
         if target is not None and i - target > REPLY_NEARBY:
             quote = " ".join(rendered[target][1].split())
-            text = f"↪ «{_truncate(quote, QUOTE_CHARS)}» {text}"
+            text = f"↪ «{_truncate(quote, QUOTE_CHARS)}» {body}"
         messages.append(Message(
             id=m["id"],
             date=datetime.fromisoformat(m["date"]),  # local time of the export, machine-independent
             from_me=m["from_id"] in my_ids,
             text=text,
+            body=body,
+            reply_to=m["reply_to_message_id"] if target is not None else None,
         ))
     return messages
 

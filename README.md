@@ -18,10 +18,13 @@
 ```
 ├── digital_twin/             v2: обработка переписки, обучение, чат
 │   ├── telegram.py             разбор экспорта: заглушки медиа, маскирование, цитаты реплаев
-│   ├── dataset.py              сессии → окна диалога с репликами <wait> (data/datasets/chat/v2)
+│   ├── threads.py              v3: ветки ответов — реплай/её серия → мой ответ → <wait> (data/datasets/chat/v3)
+│   ├── dataset.py              v2: сессии → окна диалога с репликами <wait> (data/datasets/chat/v2)
 │   ├── chat_format.py          рендер в формат Gemma 4 / Qwen3.5 с маской loss по репликам
 │   ├── train.py                LoRA через unsloth
-│   └── chat.py                 генерация «сообщение за сообщением до <wait>», eval на валидации
+│   ├── chat.py                 генерация «сообщение за сообщением до <wait>», интерактивный чат
+│   ├── evaluate.py             тест Тьюринга: судья (Qwen3.8-27B) и слепой тест на отложенных неделях
+│   └── persona.py              черновик карточки «о себе» из переписки
 ├── data/                     переписки и датасеты (не в git, кроме data/README.md)
 ├── notebooks/                v1
 │   ├── data_processing.ipynb   разбор экспорта Telegram и сборка всех вариантов датасета
@@ -94,8 +97,8 @@ mutagen project terminate  # остановить
 - `node211-22`: RTX 4500 Ada 24GB, раздел `AMD7V12-RTX4500-CCP` — по умолчанию в `slurm/jupyter.sh`.
 
 ```bash
-python3 -m digital_twin.dataset                                  # собрать датасет (локально, только stdlib)
-sbatch slurm/train.sh --model gemma-4-e4b                        # обучение на A100
+python3 -m digital_twin.threads                                  # собрать датасет v3 (локально, только stdlib)
+sbatch slurm/train.sh --model gemma-4-e4b --data-dir data/datasets/chat/v3   # обучение на A100
 sbatch -p AMD7V12-RTX4500-CCP slurm/train.sh --model qwen3.5-4b  # обучение на Ada
 srun -p AMD7V12-RTX4500-CCP --gres=gpu:1 --pty bash -c \
   "module load cuda/13.1; .venv/bin/python -m digital_twin.chat outputs/<run>/final"  # чат

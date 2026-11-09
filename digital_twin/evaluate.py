@@ -1,17 +1,18 @@
 """How much do the twin's replies look like mine? A Turing test on held-out weeks.
 
-A "moment" is a point in the validation chat right after Соня's messages, with
-the context before it and what I actually wrote next. Every system (a model,
-a sampling setting, the v1 adapter) generates a reply for the same moments;
-then a judge sees the context and two replies, mine and the system's, in random
-order, and guesses which one is real.
+A "moment" is the start of one of my reply threads in the validation weeks
+(see digital_twin/threads.py): what I actually wrote, and the input each model
+family gets there — a long conversation window for v2 models, the reply thread
+for v3 models. Every system (a model, a sampling setting) generates a reply for
+the same moments; then a judge sees the last messages of the chat (and the
+message I replied to, if it was a reply) and two replies, mine and the
+system's, in random order, and guesses which one is real.
 
     fool rate = how often the judge takes the generated reply for mine
                 50% — indistinguishable, 0% — always caught
 
     python -m digital_twin.evaluate prepare                    # fix the moments (local, stdlib)
-    python -m digital_twin.evaluate generate outputs/<run>/final --name gemma --temperature 0.7   # GPU
-    python -m digital_twin.evaluate generate --v1 outputs/v1_run_20250506_194631/checkpoint-2300 --name v1
+    python -m digital_twin.evaluate generate outputs/<run>/final --prompt v3 --name gemma --temperature 0.7   # GPU
     python -m digital_twin.evaluate judge gemma v1             # GPU (A100), local judge model
     python -m digital_twin.evaluate blind gemma                # you are the judge (local, stdlib)
     python -m digital_twin.evaluate report                     # all results side by side
@@ -25,14 +26,15 @@ import random
 import statistics
 from pathlib import Path
 
-from digital_twin.dataset import OUT_DIR, ROOT, WAIT
+from digital_twin.dataset import CHARS_PER_TOKEN, ROOT, SESSION_GAP, TOKENS_PER_TURN, VAL_FROM, WAIT, system_prompt
 
 EVAL_DIR = ROOT / "data" / "eval"
 MOMENTS = EVAL_DIR / "moments.jsonl"
 N_MOMENTS = 200
 # Full Qwen3.8-27B already downloaded on mipt (quantized to 4 bit on load); override with DT_JUDGE_MODEL.
 JUDGE_MODEL = os.environ.get("DT_JUDGE_MODEL", str(Path.home() / "models" / "qwen3.8-27b"))
-JUDGE_CONTEXT = 20  # messages of context shown to the judge
+DISPLAY_MESSAGES = 12  # chat shown to the judge and to me
+V2_CONTEXT_TOKENS = 1400  # like the windows the v2 models were trained on
 SHUFFLED = "shuffled_real"  # sanity system: my real reply from another moment
 
 
@@ -54,19 +56,47 @@ def candidates_path(name):
 
 # ── prepare ────────────────────────────────────────────────────────────────
 
+def v2_context(chat, i):
+    """The conversation window a v2 model saw in training: the session so far, WAIT after my bursts."""
+    start = i
+    while start > 0 and chat.messages[start].date - chat.messages[start - 1].date <= SESSION_GAP:
+        start -= 1
+    turns = []
+    before = chat.messages[start:i]
+    for k, m in enumerate(before):
+        turns.append({"role": "assistant" if m.from_me else "user", "content": m.text})
+        if m.from_me and k + 1 < len(before) and not before[k + 1].from_me:
+            turns.append({"role": "assistant", "content": WAIT})
+    budget, kept = V2_CONTEXT_TOKENS, []
+    for t in reversed(turns):
+        budget -= len(t["content"]) / CHARS_PER_TOKEN + TOKENS_PER_TURN
+        if budget < 0:
+            break
+        kept.insert(0, t)
+    first = chat.messages[max(start, i - len(kept))].date
+    return [{"role": "system", "content": system_prompt(first)}] + kept
+
+
 def prepare(n=N_MOMENTS, seed=0):
+    from digital_twin.threads import Chat, build, to_example
+
+    chat, _ = build()
     moments = []
-    for example in read_jsonl(OUT_DIR / "val.jsonl"):
-        msgs = example["messages"]
-        for i in range(1, len(msgs)):
-            if msgs[i - 1]["role"] == "user" and msgs[i]["role"] == "assistant" and msgs[i]["train"]:
-                real = []
-                for m in msgs[i:]:
-                    if m["role"] != "assistant" or m["content"] == WAIT:
-                        break
-                    real.append(m["content"])
-                context = [{"role": m["role"], "content": m["content"]} for m in msgs[:i]]
-                moments.append({"context": context, "real": real})
+    for kind, context, inputs, output in chat.threads():
+        if output[0].date < VAL_FROM:
+            continue
+        i = chat.pos[output[0].id]
+        v3 = [{"role": m["role"], "content": m["content"]} for m in to_example(kind, context, inputs, output)["messages"]
+              if not m["train"]]
+        moments.append({
+            "kind": kind,
+            "date": output[0].date.isoformat(),
+            "display": [{"role": "assistant" if m.from_me else "user", "content": m.text}
+                        for m in chat.messages[max(0, i - DISPLAY_MESSAGES):i]],
+            "target": inputs[0].body if kind == "reply" else None,
+            "inputs": {"v2": v2_context(chat, i), "v3": v3},
+            "real": [m.body for m in output],
+        })
     random.seed(seed)
     moments = random.sample(moments, min(n, len(moments)))
     for i, m in enumerate(moments):
@@ -74,11 +104,11 @@ def prepare(n=N_MOMENTS, seed=0):
     write_jsonl(MOMENTS, moments)
 
     # Sanity system for the judge: a real reply of mine, but to a different moment.
-    shuffled = [m["real"] for m in moments if m["real"]]
+    shuffled = [m["real"] for m in moments]
     random.shuffle(shuffled)
     write_jsonl(candidates_path(SHUFFLED),
-                [{"id": m["id"], "reply": shuffled[i % len(shuffled)]} for i, m in enumerate(moments)])
-    print(f"{len(moments)} moments written to {MOMENTS}")
+                [{"id": m["id"], "reply": shuffled[i]} for i, m in enumerate(moments)])
+    print(f"{len(moments)} moments written to {MOMENTS} ({sum(m['kind'] == 'reply' for m in moments)} replies)")
 
 
 # ── generate ───────────────────────────────────────────────────────────────
@@ -111,7 +141,7 @@ class V1Twin:
         return [line.strip() for line in text.split("\n") if line.strip()][:8]
 
 
-def generate(adapter_dir, name, v1=False, **sampling):
+def generate(adapter_dir, name, prompt, v1=False, **sampling):
     if v1:
         twin = V1Twin(adapter_dir)
     else:
@@ -119,31 +149,38 @@ def generate(adapter_dir, name, v1=False, **sampling):
         twin = Twin(adapter_dir)
     rows = []
     for m in read_jsonl(MOMENTS):
-        rows.append({"id": m["id"], "reply": twin.reply([dict(x) for x in m["context"]], **sampling)})
+        rows.append({"id": m["id"], "reply": twin.reply([dict(x) for x in m["inputs"][prompt]], **sampling)})
     write_jsonl(candidates_path(name), rows)
-    meta = {"adapter": str(adapter_dir), "v1": v1, **sampling}
+    meta = {"adapter": str(adapter_dir), "prompt": prompt, "v1": v1, **sampling}
     (EVAL_DIR / "candidates" / f"{name}.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(f"{len(rows)} replies written to {candidates_path(name)}")
 
 
 # ── judging ────────────────────────────────────────────────────────────────
 
-def render_context(context, n=JUDGE_CONTEXT):
+def render_context(context):
     lines = [f"{'Соня' if m['role'] == 'user' else 'Леша'}: {m['content']}"
              for m in context if m["role"] != "system" and m["content"] != WAIT]
-    return "\n".join(lines[-n:])
+    return "\n".join(lines)
+
+
+def render_moment(m):
+    text = render_context(m["display"])
+    if m["target"]:
+        text += f"\n\n(Леша отвечает реплаем на сообщение Сони: «{m['target']}»)"
+    return text
 
 
 def render_reply(reply):
     return "\n".join(f"Леша: {t}" for t in reply) if reply else "(Леша ничего не ответил)"
 
 
-def judge_prompt(context, a, b):
+def judge_prompt(moment, a, b):
     return (
         "Ниже — кусок переписки Леши и Сони в Telegram. После него два варианта того, что Леша написал дальше. "
         "Один вариант настоящий, другой сгенерирован нейросетью, которая подражает Леше. "
         "Определи, какой настоящий: смотри на стиль, связность с перепиской и правдоподобие.\n\n"
-        f"Переписка:\n{render_context(context)}\n\n"
+        f"Переписка:\n{render_moment(moment)}\n\n"
         f"Вариант A:\n{render_reply(a)}\n\n"
         f"Вариант B:\n{render_reply(b)}\n\n"
         "Какой вариант настоящий? Ответь одной буквой: A или B."
@@ -180,8 +217,8 @@ def judge(names):
         for c in read_jsonl(candidates_path(name)):
             m = moments[c["id"]]
             # Both orders cancel the judge's position bias.
-            fooled_as_a = j.p_a(judge_prompt(m["context"], c["reply"], m["real"]))
-            fooled_as_b = 1 - j.p_a(judge_prompt(m["context"], m["real"], c["reply"]))
+            fooled_as_a = j.p_a(judge_prompt(m, c["reply"], m["real"]))
+            fooled_as_b = 1 - j.p_a(judge_prompt(m, m["real"], c["reply"]))
             rows.append({"id": c["id"], "fooled": (fooled_as_a + fooled_as_b) / 2})
         write_jsonl(EVAL_DIR / "judge" / f"{name}.jsonl", rows)
         print(f"{name}: fool rate {statistics.mean(r['fooled'] for r in rows):.1%}")
@@ -201,7 +238,7 @@ def blind(name, n=30):
             m = moments[c["id"]]
             gen_first = random.random() < 0.5
             options = [c["reply"], m["real"]] if gen_first else [m["real"], c["reply"]]
-            print(f"══════ {k}/{min(n, len(todo))} ══════\n{render_context(m['context'], 12)}\n")
+            print(f"══════ {k}/{min(n, len(todo))} ══════\n{render_moment(m)}\n")
             for i, o in enumerate(options, 1):
                 print(f"── {i} ──\n{render_reply(o)}\n")
             answer = ""
@@ -249,6 +286,7 @@ def main():
     g = sub.add_parser("generate")
     g.add_argument("adapter_dir", type=Path)
     g.add_argument("--name", required=True)
+    g.add_argument("--prompt", choices=["v2", "v3"], required=True, help="dataset family the adapter was trained on")
     g.add_argument("--v1", action="store_true")
     g.add_argument("--temperature", type=float)
     g.add_argument("--top-p", type=float)
@@ -267,7 +305,7 @@ def main():
     elif args.cmd == "generate":
         sampling = {k: v for k, v in (("temperature", args.temperature), ("top_p", args.top_p),
                                       ("min_p", args.min_p)) if v is not None}
-        generate(args.adapter_dir, args.name, v1=args.v1, **sampling)
+        generate(args.adapter_dir, args.name, args.prompt, v1=args.v1, **sampling)
     elif args.cmd == "judge":
         judge(args.names)
     elif args.cmd == "blind":
