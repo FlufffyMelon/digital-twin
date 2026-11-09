@@ -25,6 +25,7 @@
 | `train.py` | Обучение LoRA (основной скрипт) |
 | `inference.ipynb` | Генерация ответов обученным адаптером, интерактивный чат |
 | `run.sh`, `jupyter.sh` | slurm-скрипты обучения и Jupyter Lab |
+| `pyproject.toml`, `uv.lock` | Окружение (uv) |
 | `scripts/nbstrip.py` | Очистка выводов ноутбуков (git-фильтр и проверка в хуке) |
 | `mutagen.yml` | Синхронизация кода и данных с кластером |
 
@@ -36,11 +37,22 @@
 
 ## Окружение
 
+Окружение собирается через [uv](https://docs.astral.sh/uv/) и только на
+кластере (Linux x86_64, CUDA 13): torch, torchvision и xformers берутся из
+индекса PyTorch `cu130`, точные версии зафиксированы в `uv.lock`.
+
 ```bash
-pip install -r requirements.txt
+uv sync --frozen
 ```
 
-`requirements.txt` фиксирует версии, с которыми прошло первое обучение.
+| | v1 (softcluster, май 2025) | v2 (mipt) |
+|---|---|---|
+| CUDA / torch | 12.x / 2.5.1 | 13.0 / 2.14.1 |
+| unsloth | 2025.4.7 | 2026.11.3 |
+| transformers / trl | 4.51.3 / 0.15.2 | 5.17.0 / 1.15.0 |
+| peft / bitsandbytes | 0.15.2 / 0.45.5 | 0.21.2 / 0.50.2 |
+
+Верхние границы torch, transformers, trl и datasets задаёт unsloth.
 
 ## Первичная настройка после клонирования
 
@@ -65,8 +77,16 @@ mutagen sync list digitaltwin
 mutagen project terminate  # остановить
 ```
 
-Обучение на кластере:
+Кластер — mipt, GPU-узлы:
+
+- `node208-24`: A100 80GB, раздел `AMD7763-A100-CCP` — по умолчанию в `run.sh`;
+- `node211-22`: RTX 4500 Ada 24GB, раздел `AMD7V12-RTX4500-CCP` — по умолчанию в `jupyter.sh`.
 
 ```bash
-sbatch run.sh
+sbatch run.sh                              # обучение на A100
+sbatch -p AMD7V12-RTX4500-CCP run.sh       # обучение на Ada
+sbatch jupyter.sh                          # Jupyter Lab
 ```
+
+Лучший чекпоинт v1 (`run_20250506_194631/checkpoint-2300`, eval_loss 0.720)
+лежит на mipt в `outputs/v1_run_20250506_194631/` как точка сравнения.

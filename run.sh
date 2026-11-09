@@ -1,13 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=python
-#SBATCH -w node4
+#SBATCH --job-name=digitaltwin
+#SBATCH --partition=AMD7763-A100-CCP    # A100 80GB, node208-24; Ada: sbatch -p AMD7V12-RTX4500-CCP run.sh
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1              # Request 1 GPU
 #SBATCH --cpus-per-task=8         # Number of CPU cores per task
+#SBATCH --mem=64G
 
-# Activate your environment
-source ~/DigitalTwin/.venv/bin/activate
+module load cuda/13.1
+
+# Activate your environment (built with `uv sync`)
+source .venv/bin/activate
 
 # Set WandB project name and mode (can be overridden in train.py)
 export WANDB_PROJECT="digitaltwin-llama3-finetune" # Match the one in train.py or manage centrally here
@@ -18,4 +21,3 @@ mkdir -p logs outputs # Changed to base output dir
 
 # Run the training using srun
 srun python train.py
-

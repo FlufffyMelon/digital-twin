@@ -1,0 +1,41 @@
+[project]
+name = "digital-twin"
+version = "0.2.0"
+description = "LLM fine-tuned on my Telegram chats to answer like me"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Верхние границы torch/transformers/trl/datasets задаёт сам unsloth.
+    "unsloth>=2026.11.3",
+    "unsloth-zoo>=2026.11.3",
+    "torch==2.14.*",
+    "torchvision==0.29.*",
+    "xformers==0.0.35",
+    "bitsandbytes>=0.50.2",
+    "transformers",
+    "trl",
+    "peft",
+    "accelerate",
+    "datasets",
+    "huggingface-hub",
+    "hf-transfer",
+    "wandb",
+    "numpy",
+    "matplotlib",
+    "jupyterlab",
+    "ipykernel",
+]
+
+[tool.uv]
+package = false
+# Окружение собирается только на кластере: колёс torch+cu130 под macOS нет.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+xformers = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
