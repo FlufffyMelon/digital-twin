@@ -10,6 +10,13 @@
 
 module load cuda/13.1
 
+# The home quota (1 TB) is shared with other projects: refuse to start when it is nearly full.
+free_gb=$(( ($(getfattr --only-values -n ceph.quota.max_bytes ~ 2>/dev/null) - $(getfattr --only-values -n ceph.dir.rbytes ~ 2>/dev/null)) / 1024**3 ))
+if [ "$free_gb" -lt 15 ]; then
+    echo "only ${free_gb}G left in the home quota, not starting" >&2
+    exit 1
+fi
+
 # Activate your environment (built with `uv sync`)
 source .venv/bin/activate
 

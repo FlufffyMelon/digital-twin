@@ -20,6 +20,7 @@ Files live in data/eval/ (personal data: synced to the cluster, never in git).
 """
 import argparse
 import json
+import os
 import random
 import statistics
 from pathlib import Path
@@ -29,7 +30,8 @@ from digital_twin.dataset import OUT_DIR, ROOT, WAIT
 EVAL_DIR = ROOT / "data" / "eval"
 MOMENTS = EVAL_DIR / "moments.jsonl"
 N_MOMENTS = 200
-JUDGE_MODEL = "unsloth/Qwen3.8-27B-unsloth-bnb-4bit"
+# Full Qwen3.8-27B already downloaded on mipt (quantized to 4 bit on load); override with DT_JUDGE_MODEL.
+JUDGE_MODEL = os.environ.get("DT_JUDGE_MODEL", str(Path.home() / "models" / "qwen3.8-27b"))
 JUDGE_CONTEXT = 20  # messages of context shown to the judge
 SHUFFLED = "shuffled_real"  # sanity system: my real reply from another moment
 
