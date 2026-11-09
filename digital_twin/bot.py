@@ -33,6 +33,8 @@ LOCAL_PORT = 8765
 DEBOUNCE_SECONDS = 4.0   # her bursts: 65% of pauses inside a burst are under 30 s, most under a few seconds
 DEFAULT_TEMPERATURE = 0.7
 STICKER = re.compile(r"^\[стикер ?(.*?)\]$")
+# Media a v4 model may still "send"; the bot cannot, so the placeholder is dropped.
+MEDIA = re.compile(r"\[(?:фото|кружок|голосовое|видео|гифка|файл|аудио|пересланное|опрос|геопозиция|контакт|ссылка)\]\s*")
 HELP = (
     "Я цифровой двойник Леши.\n"
     "Пиши как обычно, можно несколькими сообщениями подряд — я отвечу, когда ты замолчишь на пару секунд.\n\n"
@@ -182,9 +184,12 @@ class Bot:
             self.tg.call("sendChatAction", chat_id=chat_id, action="typing")
             burst = self.model.reply(messages, chat.temperature)
             for text in burst:
+                shown = self.outgoing(text)
+                if not shown:
+                    continue
                 self.tg.call("sendChatAction", chat_id=chat_id, action="typing")
-                time.sleep(min(0.6 + 0.04 * len(text), 4.0))  # roughly how long typing it takes
-                sent = self.send(chat_id, self.outgoing(text))
+                time.sleep(min(0.6 + 0.04 * len(shown), 4.0))  # roughly how long typing it takes
+                sent = self.send(chat_id, shown)
                 with chat.lock:
                     chat.texts[sent["message_id"]] = (chat.count, text)
                     chat.count += 1
@@ -202,8 +207,11 @@ class Bot:
 
     @staticmethod
     def outgoing(text):
+        """What Telegram gets: a sticker as its emoji, other media placeholders dropped."""
         sticker = STICKER.match(text)
-        return (sticker.group(1) or "🙂") if sticker else text
+        if sticker:
+            return sticker.group(1) or "🙂"
+        return MEDIA.sub("", text).strip()
 
     def send(self, chat_id, text):
         return self.tg.call("sendMessage", chat_id=chat_id, text=text)
