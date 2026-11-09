@@ -13,6 +13,8 @@ from unsloth import FastModel  # noqa: F401 -- must be imported before transform
 
 import argparse
 import json
+import signal
+import sys
 import socket
 import threading
 import time
@@ -67,6 +69,7 @@ def main():
 
     twin = Twin(args.adapter_dir, load_in_4bit=args.load_in_4bit)
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(twin, args.adapter_dir, threading.Lock()))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # scancel: still remove the address file
     ADDR_FILE.parent.mkdir(exist_ok=True)
     ADDR_FILE.write_text(f"{socket.gethostname()}:{args.port}\n")
     print(f"serving {args.adapter_dir} on {socket.gethostname()}:{args.port}", flush=True)
