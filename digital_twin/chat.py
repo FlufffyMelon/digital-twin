@@ -3,8 +3,8 @@
 The model writes a message, sees it in the context, and either writes the next
 one or answers WAIT, after which it stays silent until a new message arrives.
 
-    python -m digital_twin.chat outputs/<run>/final                       # starts from the last 40 real messages
-    python -m digital_twin.chat outputs/<run>/final --history 0 --temperature 0.6
+    python -m digital_twin.chat outputs/<run>/final --temperature 0.7
+    python -m digital_twin.chat outputs/<v2 run>/final --history 0   # v2: start from an empty chat, not the last 40 messages
 
 Interactive: every line is one message from Соня; an empty line hands the turn over.
 """
@@ -73,40 +73,62 @@ def real_history(n):
     return [{"role": t.role, "content": t.content} for t in turns[-n:]] if n else []
 
 
-def interactive(twin, history=0, **sampling):
+def interactive(twin, prompt, history=0, **sampling):
+    """v2 models see the whole conversation; v3 models only her new messages and my previous one."""
     sys.stdin.reconfigure(errors="replace")  # a stray broken byte must not end the chat
-    start = [{"role": "system", "content": system_prompt(datetime.now())}] + real_history(history)
+    start = real_history(history) if prompt == "v2" else []
     for m in start[-8:]:
-        if m["role"] != "system" and m["content"] != WAIT:
+        if m["content"] != WAIT:
             print(f"{'Соня' if m['role'] == 'user' else 'Леша'} (история): {m['content']}")
     print("Пиши сообщения построчно; пустая строка — передать ход. /reset — новый диалог, /exit — выход.")
-    messages, pending = list(start), []
+    conversation, pending = list(start), []
     while True:
         line = input("Соня: ").strip()
         if line == "/exit":
             return
         if line == "/reset":
-            messages, pending = list(start), []
+            conversation, pending = list(start), []
             continue
         if line:
             pending.append(line)
             continue
-        messages += [{"role": "user", "content": text} for text in pending]
+        incoming = [{"role": "user", "content": text} for text in pending]
         pending = []
-        for text in twin.reply(messages, **sampling):
+        if prompt == "v2":
+            context = conversation
+        else:
+            mine = [m for m in conversation if m["role"] == "assistant" and m["content"] != WAIT]
+            context = mine[-1:]
+        messages = [{"role": "system", "content": system_prompt(datetime.now())}] + context + incoming
+        burst = twin.reply(messages, **sampling)
+        conversation += incoming + [{"role": "assistant", "content": t} for t in burst]
+        conversation.append({"role": "assistant", "content": WAIT})
+        for text in burst:
             print(f"Леша: {text}")
         print("Леша: ⏸")
+
+
+def prompt_family(adapter_dir):
+    """v2 or v3, from the training config saved next to the adapter (final/ or the run's final/)."""
+    for d in (adapter_dir, adapter_dir.parent / "final"):
+        config = d / "digital_twin.json"
+        if config.exists():
+            return "v3" if "chat/v3" in json.loads(config.read_text())["data_dir"] else "v2"
+    raise SystemExit("no digital_twin.json found, pass --prompt v2 or v3")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("adapter_dir", type=Path)
-    p.add_argument("--history", type=int, default=40, help="real chat messages to start from (0 — empty chat)")
+    p.add_argument("--prompt", choices=["v2", "v3"], help="dataset family; default: from digital_twin.json")
+    p.add_argument("--history", type=int, default=40, help="v2 only: real chat messages to start from (0 — empty chat)")
     p.add_argument("--temperature", type=float, help="default: the model's recommended value")
     args = p.parse_args()
 
     sampling = {"temperature": args.temperature} if args.temperature is not None else {}
-    interactive(Twin(args.adapter_dir), args.history, **sampling)
+    prompt = args.prompt or prompt_family(args.adapter_dir)
+    print(f"prompt format: {prompt}")
+    interactive(Twin(args.adapter_dir), prompt, args.history, **sampling)
 
 
 if __name__ == "__main__":
