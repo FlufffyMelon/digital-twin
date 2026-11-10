@@ -10,9 +10,10 @@ Settings live in .env at the repo root (never in git or on the cluster):
 
 Each allowed user has their own conversation. Like in the real chat, the bot
 waits for a short silence after her messages, then writes one message at a
-time until the model says WAIT. A reply to an older message carries a quote,
-as in the dataset; stickers come in and go out as emoji; other media and
-forwarded posts are ignored (the v5 model was trained on text and stickers).
+time until the model says WAIT. As in the v6 dataset, a Telegram reply shows
+its quote (↪ «…») to the model, and a message the model writes with a quote is
+sent as a real Telegram reply to that message. Stickers come in and go out as
+emoji; other media and forwarded posts are ignored (text and stickers only).
 """
 import json
 import re
@@ -23,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from digital_twin.conversation import prompt, quote
+from digital_twin.conversation import prompt, quote, unquote
 from digital_twin.dataset import ROOT, WAIT
 
 ENV_FILE = ROOT / ".env"
@@ -94,9 +95,8 @@ class Chat:
 
     def __init__(self):
         self.conversation = []  # (datetime, {"role", "content"}) — content with reply quotes
-        self.pending = []       # her messages not answered yet: (body, quoted)
-        self.texts = {}         # telegram message id -> (position, body), for reply quotes
-        self.count = 0          # messages so far, for the quote distance
+        self.pending = []       # her messages not answered yet, with reply quotes
+        self.texts = {}         # telegram message id -> body, for reply quotes
         self.temperature = DEFAULT_TEMPERATURE
         self.timer = None
         self.busy = False
@@ -104,7 +104,7 @@ class Chat:
 
     def reset(self):
         with self.lock:
-            self.conversation, self.pending, self.texts, self.count = [], [], {}, 0
+            self.conversation, self.pending, self.texts = [], [], {}
 
 
 class Bot:
@@ -151,14 +151,9 @@ class Bot:
             return  # photos, voice, video notes…: the model only knows text and stickers
 
         with chat.lock:
-            position = chat.count + len(chat.pending)
-            quoted = body
             target = msg.get("reply_to_message", {}).get("message_id")
-            if target in chat.texts:
-                target_pos, target_text = chat.texts[target]
-                quoted = quote(body, target_text, position - target_pos)
-            chat.texts[msg["message_id"]] = (position, body)
-            chat.pending.append((body, quoted))
+            chat.texts[msg["message_id"]] = body
+            chat.pending.append(quote(body, chat.texts.get(target)))
             self.schedule(chat_id, chat)
 
     def schedule(self, chat_id, chat):
@@ -175,22 +170,21 @@ class Bot:
             chat.busy = True
             incoming, chat.pending = chat.pending, []
             now = datetime.now()
-            messages = prompt(chat.conversation, [body for body, _ in incoming], now)
-            chat.conversation += [(now, {"role": "user", "content": quoted}) for _, quoted in incoming]
-            chat.count += len(incoming)
+            messages = prompt(chat.conversation, incoming, now)
+            chat.conversation += [(now, {"role": "user", "content": text}) for text in incoming]
         try:
             self.tg.call("sendChatAction", chat_id=chat_id, action="typing")
             burst = self.model.reply(messages, chat.temperature)
             for text in burst:
-                shown = self.outgoing(text)
+                q, body = unquote(text)
+                shown = self.outgoing(body)
                 if not shown:
                     continue
                 self.tg.call("sendChatAction", chat_id=chat_id, action="typing")
                 time.sleep(min(0.6 + 0.04 * len(shown), 4.0))  # roughly how long typing it takes
-                sent = self.send(chat_id, shown)
+                sent = self.send(chat_id, shown, reply_to=self.find(chat, q))
                 with chat.lock:
-                    chat.texts[sent["message_id"]] = (chat.count, text)
-                    chat.count += 1
+                    chat.texts[sent["message_id"]] = body
                     chat.conversation.append((datetime.now(), {"role": "assistant", "content": text}))
         except Exception as e:  # keep the bot alive; say why there is no answer
             print(f"reply failed: {e}")
@@ -209,8 +203,22 @@ class Bot:
         sticker = STICKER.match(text)
         return (sticker.group(1) or "🙂") if sticker else text
 
-    def send(self, chat_id, text):
-        return self.tg.call("sendMessage", chat_id=chat_id, text=text)
+    @staticmethod
+    def find(chat, q):
+        """The most recent message the quote q (possibly cut with …) was taken from."""
+        if not q:
+            return None
+        start = " ".join(q.removesuffix("…").split())
+        for message_id in sorted(chat.texts, reverse=True):
+            if " ".join(chat.texts[message_id].split()).startswith(start):
+                return message_id
+        return None
+
+    def send(self, chat_id, text, reply_to=None):
+        params = {"chat_id": chat_id, "text": text}
+        if reply_to:
+            params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+        return self.tg.call("sendMessage", **params)
 
     # ── loop ───────────────────────────────────────────────────────────────
     def run(self):
