@@ -157,8 +157,8 @@ python -m digital_twin.model.train --model gemma-4-12b --load-in-4bit \
 python -m digital_twin.model.train --model gemma-4-e4b                    # a smaller model
 ```
 
-Models: `gemma-4-12b`, `gemma-4-e4b`, `qwen3.5-9b`, `qwen3.5-4b` (add others to `MODELS` in
-`digital_twin/model/chat_format.py`). The adapter is saved to `outputs/<run>/final`, the best checkpoint by
+Models: `gemma-4-12b`, `gemma-4-e4b`, `gemma-4-e4b-base`, `qwen3.5-9b`, `qwen3.5-4b` (add others to `MODELS`
+in `digital_twin/model/chat_format.py`). The adapter is saved to `outputs/<run>/final`, the best checkpoint by
 validation loss; `--report-to wandb` logs the run. On a Slurm cluster: `sbatch slurm/train.sh --model gemma-4-12b`
 from the repository root (change the partition in the script to yours).
 
@@ -168,7 +168,8 @@ from the repository root (change the partition in the script to yours).
 python -m digital_twin.chat.terminal outputs/<run>/final --load-in-4bit
 ```
 
-One message per line, an empty line hands the turn over. `> start of a message | text` replies to that message.
+One message per line, an empty line hands the turn over; `/reset` starts over, `/exit` quits.
+`> start of a message | text` replies to that message. `--temperature` overrides the sampling temperature.
 
 **5. Telegram bot.** Create a bot with [@BotFather](https://t.me/BotFather) and write `.env` in the repository root
 (it is git-ignored):
@@ -232,7 +233,8 @@ assets/                 images for this README
 
 A chat is personal data of two people. Nothing from it is in this repository: `.gitignore` is an allow-list of
 code and documentation, `data/`, `outputs/` and `logs/` are ignored entirely, and the pre-commit hook rejects
-data files, weights and anything over 1 MB. The model server does not log message contents. Fine-tune on a
+data files, weights and anything over 1 MB. The model server does not log message contents, but it has no
+authentication: run it only where the port is not reachable by strangers. Fine-tune on a
 chat only with the consent of the other person in it.
 
 ## License
