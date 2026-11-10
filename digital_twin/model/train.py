@@ -1,7 +1,13 @@
-"""LoRA fine-tuning on the chat dataset (see digital_twin/dataset.py).
+"""LoRA fine-tuning on the dataset built by digital_twin.dataset.build.
 
-    python -m digital_twin.train --model gemma-4-e4b
-    python -m digital_twin.train --model qwen3.5-4b --max-steps 20   # smoke test
+    python -m digital_twin.model.train --model gemma-4-12b                       # A100 80GB, ~1.2 h
+    python -m digital_twin.model.train --model gemma-4-12b --load-in-4bit \
+        --batch-size 4 --grad-accum 4                                           # 24GB GPU
+    python -m digital_twin.model.train --model gemma-4-e4b --max-steps 20       # smoke test
+
+Loss is computed on my turns only (the trained turns of each example, WAIT included).
+The adapter is saved to outputs/<run>/final with digital_twin.json: the training
+settings and the names for the system prompt, which the chat front-ends read.
 """
 from unsloth import FastModel  # must be imported before transformers / trl
 
@@ -13,10 +19,10 @@ from pathlib import Path
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-from digital_twin.chat_format import FORMATS, MODELS, encode
+from digital_twin.model.chat_format import FORMATS, MODELS, encode
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data" / "datasets" / "chat" / "v2"
+ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = ROOT / "data" / "dataset"
 
 
 def parse_args():
@@ -29,13 +35,14 @@ def parse_args():
     p.add_argument("--r", type=int, default=32)
     p.add_argument("--alpha", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--epochs", type=float, default=2)
+    p.add_argument("--epochs", type=float, default=1)
     p.add_argument("--max-steps", type=int, default=-1)
-    p.add_argument("--batch-size", type=int, default=4)
-    p.add_argument("--grad-accum", type=int, default=4)
-    p.add_argument("--warmup-steps", type=int, default=15)  # ~5% of a 2-epoch run
-    p.add_argument("--eval-steps", type=int, default=50)
+    p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--grad-accum", type=int, default=1)
+    p.add_argument("--warmup-steps", type=int, default=50)
+    p.add_argument("--eval-steps", type=int, default=300)
     p.add_argument("--save-total-limit", type=int, default=2, help="0 — keep every checkpoint")
+    p.add_argument("--report-to", default="none", help="e.g. wandb")
     return p.parse_args()
 
 
@@ -45,6 +52,11 @@ def main():
     fmt = FORMATS[format_name]
     run_name = args.run_name or f"{args.model}_{datetime.datetime.now():%Y%m%d_%H%M%S}"
     output_dir = ROOT / "outputs" / run_name
+    meta = json.loads((args.data_dir / "meta.json").read_text())
+    config = {"model": args.model, "base_model": model_name, "format": format_name,
+              "me_name": meta["me_name"], "partner_name": meta["partner_name"], **vars(args)}
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "digital_twin.json").write_text(json.dumps(config, ensure_ascii=False, indent=2, default=str))
 
     model, processor = FastModel.from_pretrained(
         model_name=model_name,
@@ -110,7 +122,7 @@ def main():
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             seed=3407,
-            report_to="wandb",
+            report_to=args.report_to,
             run_name=run_name,
         ),
     )
@@ -119,9 +131,7 @@ def main():
     final_dir = output_dir / "final"
     model.save_pretrained(final_dir)
     processor.save_pretrained(final_dir)
-    with open(final_dir / "digital_twin.json", "w") as f:
-        json.dump({"model": args.model, "base_model": model_name, "format": format_name, **vars(args)},
-                  f, ensure_ascii=False, indent=2, default=str)
+    (final_dir / "digital_twin.json").write_text((output_dir / "digital_twin.json").read_text())
     print(f"saved to {final_dir}, best checkpoint: {trainer.state.best_model_checkpoint}")
 
 

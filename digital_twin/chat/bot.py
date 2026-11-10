@@ -1,19 +1,22 @@
-"""Telegram bot for the twin (runs on the laptop: the cluster cannot reach Telegram).
+"""Telegram bot for the twin. Stdlib only: it can run on a laptop without the GPU stack.
 
-    sbatch slurm/serve.sh outputs/<run>/final --load-in-4bit   # on mipt: the model server
-    python3 -m digital_twin.bot                                 # here: tunnel + bot
+    python -m digital_twin.chat.server outputs/<run>/final   # on the GPU machine: the model
+    python3 -m digital_twin.chat.bot                          # anywhere that reaches Telegram
 
-Settings live in .env at the repo root (never in git or on the cluster):
+Settings live in .env at the repository root (git-ignored):
 
     TELEGRAM_TOKEN=123456:ABC...      # from @BotFather
     ALLOWED_USERS=111111111,222222222 # Telegram user ids; /start shows yours
+    MODEL_URL=http://127.0.0.1:8765   # the model server (this is the default)
+    SSH_HOST=cluster                  # optional: reach the server through `ssh -L` to this host,
+                                      # at the node and port the server wrote to logs/serve.addr
 
 Each allowed user has their own conversation. Like in the real chat, the bot
 waits for a short silence after her messages, then writes one message at a
-time until the model says WAIT. As in the v6 dataset, a Telegram reply shows
-its quote (↪ «…») to the model, and a message the model writes with a quote is
-sent as a real Telegram reply to that message. Stickers come in and go out as
-emoji; other media and forwarded posts are ignored (text and stickers only).
+time until the model says WAIT. As in the dataset, a Telegram reply shows its
+quote (↪ «…») to the model, and a message the model writes with a quote is sent
+as a real Telegram reply to that message. Stickers come in and go out as emoji;
+other media and forwarded posts are ignored (text and stickers only).
 """
 import json
 import re
@@ -23,19 +26,20 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 
-from digital_twin.conversation import prompt, quote, unquote
-from digital_twin.dataset import ROOT, WAIT
+from digital_twin.prompt import WAIT, quote, recent, unquote
 
+ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env"
 ADDR_FILE = ROOT / "logs" / "serve.addr"
-SSH_HOST = "mipt"
-LOCAL_PORT = 8765
+DEFAULT_MODEL_URL = "http://127.0.0.1:8765"
+LOCAL_PORT = 8765  # local end of the SSH tunnel
 DEBOUNCE_SECONDS = 4.0   # her bursts: 65% of pauses inside a burst are under 30 s, most under a few seconds
 DEFAULT_TEMPERATURE = 0.7
 STICKER = re.compile(r"^\[стикер ?(.*?)\]$")
 HELP = (
-    "Я цифровой двойник Леши.\n"
+    "Я цифровой двойник: {me}.\n"
     "Пиши как обычно, можно несколькими сообщениями подряд — я отвечу, когда ты замолчишь на пару секунд.\n\n"
     "/reset — забыть переписку и начать заново\n"
     "/temp 0.7 — температура (меньше — осторожнее, больше — разнообразнее)\n"
@@ -67,21 +71,30 @@ class Telegram:
 
 
 class Model:
-    """The model server on the cluster, reached through an SSH tunnel."""
+    """The model server: at MODEL_URL, or on a cluster node through an SSH tunnel to SSH_HOST."""
 
-    def __init__(self):
-        node, port = ADDR_FILE.read_text().strip().split(":")
-        self.url = f"http://127.0.0.1:{LOCAL_PORT}"
-        self.tunnel = subprocess.Popen(
-            ["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-L", f"127.0.0.1:{LOCAL_PORT}:{node}:{port}", SSH_HOST])
+    def __init__(self, env):
+        self.tunnel = None
+        self.url = env.get("MODEL_URL", DEFAULT_MODEL_URL)
+        if env.get("SSH_HOST"):
+            node, port = ADDR_FILE.read_text().strip().split(":")
+            self.url = f"http://127.0.0.1:{LOCAL_PORT}"
+            self.tunnel = subprocess.Popen(["ssh", "-N", "-o", "ExitOnForwardFailure=yes",
+                                            "-L", f"127.0.0.1:{LOCAL_PORT}:{node}:{port}", env["SSH_HOST"]])
         for _ in range(30):
             try:
                 with urllib.request.urlopen(self.url + "/health", timeout=5) as resp:
-                    print(f"model server: {json.load(resp)['adapter']} on {node}:{port}")
+                    health = json.load(resp)
+                    self.me_name = health["me_name"]
+                    print(f"model server: {health['adapter']} at {self.url}")
                     return
             except (urllib.error.URLError, ConnectionError):
                 time.sleep(2)
-        raise SystemExit(f"model server on {node}:{port} does not answer; is the slurm job running?")
+        raise SystemExit(f"the model server at {self.url} does not answer; is it running?")
+
+    def close(self):
+        if self.tunnel:
+            self.tunnel.terminate()
 
     def reply(self, messages, temperature):
         req = urllib.request.Request(self.url + "/reply", headers={"Content-Type": "application/json"},
@@ -112,7 +125,7 @@ class Bot:
         env = load_env()
         self.tg = Telegram(env["TELEGRAM_TOKEN"])
         self.allowed = {int(x) for x in env.get("ALLOWED_USERS", "").split(",") if x.strip()}
-        self.model = Model()
+        self.model = Model(env)
         self.chats = {}
 
     # ── incoming ───────────────────────────────────────────────────────────
@@ -122,14 +135,14 @@ class Bot:
         if user not in self.allowed:
             print(f"ignored a message from user {user} (not in ALLOWED_USERS)")
             if text.startswith("/start"):
-                self.send(chat_id, f"Твой Telegram ID: {user}. Попроси Лешу добавить его в бота.")
+                self.send(chat_id, f"Твой Telegram ID: {user}. Попроси владельца бота добавить его в ALLOWED_USERS.")
             return
         chat = self.chats.setdefault(chat_id, Chat())
 
         if text.startswith("/"):
             command, _, arg = text.partition(" ")
             if command in ("/start", "/help"):
-                self.send(chat_id, HELP + f"\n\nТвой Telegram ID: {user}")
+                self.send(chat_id, HELP.format(me=self.model.me_name) + f"\n\nТвой Telegram ID: {user}")
             elif command == "/reset":
                 chat.reset()
                 self.send(chat_id, "Контекст сброшен, начинаем заново.")
@@ -170,7 +183,7 @@ class Bot:
             chat.busy = True
             incoming, chat.pending = chat.pending, []
             now = datetime.now()
-            messages = prompt(chat.conversation, incoming, now)
+            messages = recent(chat.conversation, now) + [{"role": "user", "content": text} for text in incoming]
             chat.conversation += [(now, {"role": "user", "content": text}) for text in incoming]
         try:
             self.tg.call("sendChatAction", chat_id=chat_id, action="typing")
@@ -246,7 +259,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        bot.model.tunnel.terminate()
+        bot.model.close()
 
 
 if __name__ == "__main__":

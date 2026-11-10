@@ -1,7 +1,7 @@
 #!/bin/sh
-# Последняя линия защиты от утечки личных данных в git:
-# отклоняет коммит, если в нём есть данные, веса или ноутбуки с выводами.
-# Подключается через `git config core.hooksPath .githooks`.
+# Last line of defence against personal data in git: rejects a commit
+# with chat exports, datasets, weights or logs in it.
+# Enable with `git config core.hooksPath .githooks`.
 
 MAX_BYTES=1000000
 fail=0
@@ -11,43 +11,29 @@ files=$(git diff --cached --name-only --diff-filter=ACMR)
 
 for f in $files; do
     case "$f" in
-        *.json|*.jsonl|*.csv|*.tsv|*.parquet|*.arrow|*.txt.gz|*.zip|*.tar|*.tar.gz|\
+        *.json|*.jsonl|*.csv|*.tsv|*.parquet|*.arrow|*.zip|*.tar|*.tar.gz|*.ipynb|\
         *.safetensors|*.bin|*.pt|*.pth|*.ckpt|*.gguf|*.npz|*.npy|*.pkl|*.out|*.log)
-            # requirements*.txt не попадает сюда: шаблона *.txt в списке нет
-            echo "pre-commit: файл данных/весов в коммите: $f" >&2
+            echo "pre-commit: data or weights file in the commit: $f" >&2
             fail=1
             ;;
     esac
 
     case "$f" in
         data/README.md) ;;
-        data/*|outputs/*|logs/*)
-            echo "pre-commit: файл из каталога с личными данными: $f" >&2
+        data/*|outputs/*|logs/*|backup/*)
+            echo "pre-commit: file from a personal data folder: $f" >&2
             fail=1
             ;;
     esac
 
     size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
     if [ "$size" -gt "$MAX_BYTES" ]; then
-        echo "pre-commit: файл больше 1 МБ: $f ($size байт)" >&2
+        echo "pre-commit: file over 1 MB: $f ($size bytes)" >&2
         fail=1
     fi
-
-    case "$f" in
-        *.ipynb)
-            tmp=$(mktemp)
-            git show ":$f" > "$tmp"
-            if ! python3 scripts/nbstrip.py --check "$tmp" 2>/dev/null; then
-                echo "pre-commit: в ноутбуке остались выводы ячеек: $f" >&2
-                echo "            (фильтр nbstrip не настроен? см. README.md)" >&2
-                fail=1
-            fi
-            rm -f "$tmp"
-            ;;
-    esac
 done
 
 if [ "$fail" -ne 0 ]; then
-    echo "pre-commit: коммит отклонён. Личные данные и веса в git не кладём." >&2
+    echo "pre-commit: commit rejected. Chats, datasets and weights stay out of git." >&2
     exit 1
 fi

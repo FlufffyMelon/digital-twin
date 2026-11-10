@@ -1,16 +1,16 @@
-"""Serve a trained adapter over HTTP for the Telegram bot (runs on a GPU node).
+"""Serve a trained adapter over HTTP for the Telegram bot (runs on the GPU machine).
 
-    python -m digital_twin.server outputs/<run>/final --load-in-4bit
+    python -m digital_twin.chat.server outputs/<run>/final --load-in-4bit
 
-The cluster cannot reach Telegram, so the bot runs on the laptop and reaches
-this server through an SSH tunnel; the node and port are written to
-logs/serve.addr, which mutagen brings to the laptop.
+The bot can run elsewhere (e.g. on a laptop when the GPU cluster cannot reach
+Telegram) and reach this server through an SSH tunnel: the host and port are
+written to logs/serve.addr.
 
-    GET  /health                                  -> {"ok": true, "adapter": ...}
+    GET  /health                                  -> {"ok": true, "adapter", "me_name", "partner_name"}
     POST /reply {"messages": [...], "temperature"} -> {"burst": ["...", ...]}
-"""
-from unsloth import FastModel  # noqa: F401 -- must be imported before transformers
 
+"messages" are the recent turns and her new messages, without the system prompt.
+"""
 import argparse
 import json
 import signal
@@ -21,10 +21,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from digital_twin.chat import Twin
-from digital_twin.dataset import ROOT
+from digital_twin.model.twin import Twin
 
-ADDR_FILE = ROOT / "logs" / "serve.addr"
+ADDR_FILE = Path(__file__).resolve().parents[2] / "logs" / "serve.addr"
 
 
 def make_handler(twin, adapter_dir, lock):
@@ -39,7 +38,8 @@ def make_handler(twin, adapter_dir, lock):
 
         def do_GET(self):
             if self.path == "/health":
-                self._send(200, {"ok": True, "adapter": str(adapter_dir)})
+                self._send(200, {"ok": True, "adapter": str(adapter_dir),
+                                 "me_name": twin.me_name, "partner_name": twin.partner_name})
             else:
                 self._send(404, {"error": "not found"})
 

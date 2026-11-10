@@ -1,29 +1,30 @@
-# Белый список: в git попадает только код и документация.
-# Переписки, датасеты и веса — личные данные, их здесь быть не должно,
-# поэтому любой файл неизвестного типа игнорируется по умолчанию.
+# Allow-list: only code and documentation go to git.
+# Chats, datasets and weights are personal data and never belong here,
+# so any file of an unknown type is ignored by default.
 *
 !*/
 !*.py
 !*.sh
-!*.ipynb
 !*.md
+!LICENSE
 !pyproject.toml
 !uv.lock
 !.python-version
 !.gitignore
-!.gitattributes
-!mutagen.yml
 !.githooks/*
+!assets/*.png
+!assets/*.jpg
 
-# Каталоги, в которые git вообще не заглядывает (даже за *.py внутри).
-# data/ — целиком, включая .md (например, карточку о себе), кроме описания каталога.
+# Folders git does not look into at all (not even for *.py inside).
+# data/ — entirely, except its README.
 data/**
 !data/README.md
-.venv/
 outputs/
+logs/
+backup/
+.venv/
 wandb/
 unsloth_compiled_cache/
 huggingface_tokenizers_cache/
 __pycache__/
-.ipynb_checkpoints/
 .claude/
