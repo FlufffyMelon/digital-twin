@@ -11,16 +11,12 @@ An LLM fine-tuned on three years of my Telegram chat with my girlfriend, so that
 short messages one after another, stickers, replies to a particular message, and knowing when to stop
 and wait for her answer. It runs as a Telegram bot.
 
-<table>
-  <tr>
-    <th>Real chat</th>
-    <th>Chat with the twin</th>
-  </tr>
-  <tr>
-    <td><img src="assets/real.png" alt="A real conversation" width="100%"></td>
-    <td><img src="assets/twin.png" alt="A conversation with the bot" width="100%"></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/twin.png" alt="A conversation with the twin in Telegram" width="600">
+</p>
+
+The twin is on the left. It writes several short messages, answers a particular message with a real
+Telegram reply, adds a follow-up and then waits for an answer.
 
 The code works for any personal chat: export it from Telegram, build the dataset, fine-tune, chat.
 
